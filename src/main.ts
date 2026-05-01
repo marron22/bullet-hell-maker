@@ -1,10 +1,20 @@
 import "./styles.css";
 import { createAttackEvent } from "./core/eventFactory";
 import { applyAttackTemplate } from "./core/eventTemplates";
+import {
+  createAttackPackageEvent,
+  createGeneratedEventsForPackage,
+  getPackageFieldConfigs,
+  getPackageKindLabel,
+  isAttackPackageEvent,
+  isAttackPackageKind,
+  packageKinds,
+  type PackageFieldConfig,
+} from "./core/packages";
 import { createStarterPattern } from "./core/samplePattern";
 import { buildAttackFrame, clearAimCache } from "./core/simulation";
 import { PlaybackClock } from "./core/playback";
-import type { AttackEvent, AttackEventKind, BulletPattern, TimelineSettings } from "./core/types";
+import type { AttackEvent, AttackEventKind, AttackFrame, AttackPackageEvent, BulletPattern, CurvedLaserRender, HazardRender, LaserRender, ShapeRender, TimelineSettings, WallRender } from "./core/types";
 import { PreviewStage } from "./preview/PreviewStage";
 
 let pattern = createStarterPattern();
@@ -25,7 +35,20 @@ let markerDragHistoryRecorded = false;
 let snapToMeasures = false;
 let propertyTimeMode: "seconds" | "beats" = "seconds";
 let editingEventId: string | null = null;
-let activeInspectorTab: "events" | "properties" | "music" = "events";
+let activeInspectorTab: "events" | "package" | "properties" | "music" = "events";
+type EditorMode = "global" | "trajectory" | "preview";
+let editorMode: EditorMode = "global";
+let dashRequested = false;
+let dashTimeRemaining = 0;
+let dashCooldownRemaining = 0;
+let playerWasHit = false;
+const pressedPreviewKeys = new Set<string>();
+const lastPreviewDirection = { x: 0, y: -1 };
+let timelinePanelHeight = 128;
+let inspectorPanelWidth = 380;
+let activeResizeTarget: "timeline" | "inspector" | null = null;
+let suppressNextPlayClick = false;
+let suppressNextResetClick = false;
 
 const defaultMusicVolume = 0.8;
 const audio = new Audio();
@@ -42,6 +65,13 @@ const maxTimelineContentWidth = 32000;
 const minMeasureInterval = 0.05;
 const maxMeasureInterval = 120;
 const maxHistoryEntries = 100;
+const playerHitSize = 12;
+const previewMoveSpeed = 375;
+const previewDashSpeed = 1120;
+const previewDashDuration = 0.13;
+const previewDashCooldown = 0.34;
+const minimumTimelineLaneCount = 1;
+const maximumTimelineLaneCount = 12;
 const undoStack: BulletPattern[] = [];
 const redoStack: BulletPattern[] = [];
 const defaultTimelineSettings: TimelineSettings = {
@@ -113,11 +143,11 @@ const compactFieldGroups: CompactFieldGroup[] = [
   { label: "target", fields: ["targetX", "targetY"] },
   { label: "start", fields: ["startX", "startY"] },
   { label: "end", fields: ["endX", "endY"] },
-  { label: "polynomial", fields: ["polynomialA", "polynomialB", "polynomialC", "polynomialD"] },
+  { label: "polynomial", fields: ["polynomialD", "polynomialC", "polynomialB", "polynomialA"] },
 ];
 
 const propertyGroups: PropertyGroupConfig[] = [
-  { title: "Timing", numberFields: ["startTime", "duration"] },
+  { title: "Timing", numberFields: ["startTime", "duration", "warningTime", "warningAlpha"] },
   { title: "Fire", checkboxFields: ["aimAtPlayer"], numberFields: ["clipCount", "clipRepeat", "clipInterval", "angleStepDeg", "baseAngleDeg"] },
   { title: "Origin", numberFields: ["originX", "originY", "originVx", "originVy"] },
   { title: "Trajectory", numberFields: ["pathStartX", "pathSpeed", "polynomialA", "polynomialB", "polynomialC", "polynomialD", "gravity"] },
@@ -126,16 +156,17 @@ const propertyGroups: PropertyGroupConfig[] = [
 ];
 
 const numberFieldConfigs: NumberFieldConfig[] = [
+  { name: "warningAlpha", label: "warning alpha", min: 0.02, max: 1, step: 0.05, kinds: ["movingBlock", "wallSweep", "beatPulseRing", "closingWalls", "safeLaneShift"] },
   { name: "startTime", label: "開始時刻", min: 0, max: pattern.duration, step: 0.1, kinds: allKinds() },
   { name: "duration", label: "継続時間", min: 0.1, max: 30, step: 0.1, kinds: allKinds() },
   { name: "originX", label: "発生X", min: -1000, max: 2000, step: 1, kinds: unityMotionKinds() },
   { name: "originY", label: "発生Y", min: -1000, max: 2000, step: 1, kinds: unityMotionKinds() },
   { name: "originVx", label: "発生元速度X", min: -1000, max: 1000, step: 5, kinds: unityMotionKinds() },
-  { name: "originVy", label: "発生元速度Y", min: -1000, max: 1000, step: 5, kinds: unityMotionKinds() },
-  { name: "polynomialA", label: "カーブt", min: -1000, max: 1000, step: 5, kinds: unityMotionKinds() },
-  { name: "polynomialB", label: "カーブt^2", min: -600, max: 600, step: 2, kinds: unityMotionKinds() },
-  { name: "polynomialC", label: "カーブt^3", min: -200, max: 200, step: 0.5, kinds: unityMotionKinds() },
-  { name: "polynomialD", label: "カーブt^4", min: -60, max: 60, step: 0.1, kinds: unityMotionKinds() },
+{ name: "originVy", label: "発生元速度Y", min: -1000, max: 1000, step: 5, kinds: unityMotionKinds() },
+{ name: "polynomialA", label: "polynomial x", min: -8, max: 8, step: 0.05, kinds: unityMotionKinds() },
+{ name: "polynomialB", label: "polynomial x^2", min: -8, max: 8, step: 0.05, kinds: unityMotionKinds() },
+{ name: "polynomialC", label: "polynomial x^3", min: -8, max: 8, step: 0.05, kinds: unityMotionKinds() },
+{ name: "polynomialD", label: "polynomial x^4", min: -8, max: 8, step: 0.05, kinds: unityMotionKinds() },
   { name: "pathStartX", label: "開始距離", min: -1000, max: 1000, step: 1, kinds: unityMotionKinds() },
   { name: "pathSpeed", label: "移動速度", min: 0, max: 1600, step: 10, kinds: unityMotionKinds() },
   { name: "polarRadius", label: "距離倍率", min: -10, max: 10, step: 0.05, kinds: unityMotionKinds() },
@@ -322,41 +353,43 @@ const checkboxFieldConfigs: CheckboxFieldConfig[] = [
 ];
 
 const propertyDescriptions: Record<string, string> = {
-  startTime: "Event start time on the timeline.",
-  duration: "How long the spawned attack remains active after it fires.",
-  clipCount: "Number of bullets or shapes created at the same firing moment.",
-  clipRepeat: "How many times this event fires after the first shot.",
-  clipInterval: "Time between repeated fires.",
-  angleStepDeg: "Angle difference between bullets in the same spread.",
-  baseAngleDeg: "Base firing angle before spread and aiming offsets are applied.",
-  aimAtPlayer: "When enabled, each shot aims at the player's position at fire time.",
-  originX: "Spawn origin X position in preview coordinates.",
-  originY: "Spawn origin Y position in preview coordinates.",
-  originVx: "Horizontal velocity applied to the spawn origin.",
-  originVy: "Vertical velocity applied to the spawn origin.",
-  pathStartX: "Initial local path distance before velocity and curve terms are applied.",
-  pathSpeed: "Travel speed along the local trajectory curve.",
-  polynomialA: "Coefficient for the local trajectory term t.",
-  polynomialB: "Coefficient for the local trajectory term t^2.",
-  polynomialC: "Coefficient for the local trajectory term t^3.",
-  polynomialD: "Coefficient for the local trajectory term t^4.",
-  gravity: "Downward acceleration added while the attack is alive.",
-  polarRadius: "Final radius scale applied after the local trajectory is calculated.",
-  polarRadiusVelocity: "How much the final radius scale changes over time.",
-  polarTheta: "Final polar rotation applied after the local trajectory is calculated.",
-  polarThetaVelocity: "How quickly the final polar rotation changes over time.",
-  typeId: "Visual preset used to draw this attack.",
-  visualSize: "Base size for round or single-size visual presets.",
-  visualWidth: "Width used by rectangular, wall, and laser visual presets.",
-  visualHeight: "Height used by rectangular, wall, and laser visual presets.",
-  visualAngle: "Extra visual rotation in degrees.",
-  angleSpeed: "Visual rotation speed in degrees per second.",
-  color: "Attack color shown in the preview and timeline.",
-  musicOffset: "Time offset where the music grid starts. Use this to align beat lines to the song.",
-  bpm: "Beats per minute. Changing this also updates one-measure time.",
-  measureSeconds: "Duration of one measure in seconds. Changing this also updates BPM.",
-  beatsPerMeasure: "Number of beats contained in one measure.",
-  volume: "Music playback volume.",
+  startTime: "タイムライン上で、このイベントが始まる時刻です。",
+  duration: "発射された攻撃が有効な状態で残る時間です。",
+  warningTime: "本体攻撃が始まる前にWarningを表示する時間です。",
+  warningAlpha: "自動で表示されるWarningの透明度です。0に近いほど薄く、1に近いほど濃く表示されます。",
+  clipCount: "同じタイミングで生成する弾や図形の数です。",
+  clipRepeat: "最初の発射後に、このイベントを何回繰り返すかです。",
+  clipInterval: "繰り返し発射するときの間隔です。",
+  angleStepDeg: "同時に発射される弾同士の角度差です。",
+  baseAngleDeg: "扇状配置や自機狙い補正をかける前の基準角度です。",
+  aimAtPlayer: "オンにすると、発射時点のプレイヤー位置を狙います。",
+  originX: "プレビュー座標での発生位置Xです。",
+  originY: "プレビュー座標での発生位置Yです。",
+  originVx: "発生元そのものに加える横方向の速度です。",
+  originVy: "発生元そのものに加える縦方向の速度です。",
+  pathStartX: "軌道計算を始めるローカル距離です。",
+  pathSpeed: "ローカル軌道上を進む速度です。",
+  polynomialA: "ローカル軌道 y = ax^4 + bx^3 + cx^2 + dx の x 項に掛ける係数です。x と y は100px単位です。",
+  polynomialB: "ローカル軌道 y = ax^4 + bx^3 + cx^2 + dx の x^2 項に掛ける係数です。x と y は100px単位です。",
+  polynomialC: "ローカル軌道 y = ax^4 + bx^3 + cx^2 + dx の x^3 項に掛ける係数です。x と y は100px単位です。",
+  polynomialD: "ローカル軌道 y = ax^4 + bx^3 + cx^2 + dx の x^4 項に掛ける係数です。x と y は100px単位です。",
+  gravity: "攻撃が存在する間に加わる下向きの加速度です。",
+  polarRadius: "軌道計算後に掛ける距離倍率です。",
+  polarRadiusVelocity: "距離倍率を時間で変化させる速度です。",
+  polarTheta: "軌道計算後に掛ける回転角度です。",
+  polarThetaVelocity: "回転角度を時間で変化させる速度です。",
+  typeId: "この攻撃の見た目を決めるプリセットです。",
+  visualSize: "円形など、単一サイズで描く見た目の基本サイズです。",
+  visualWidth: "四角形、ひし形、壁、レーザーなどの見た目の幅です。ひし形では外接する幅になります。",
+  visualHeight: "四角形、ひし形、壁、レーザーなどの見た目の高さです。ひし形では外接する高さになります。",
+  visualAngle: "見た目だけに加える回転角度です。",
+  angleSpeed: "見た目を毎秒どれだけ回転させるかです。",
+  color: "プレビューとタイムラインで使う攻撃色です。",
+  musicOffset: "音楽グリッドの開始位置です。曲の拍と線を合わせるために使います。",
+  bpm: "1分あたりの拍数です。変更すると1小節の時間も更新されます。",
+  measureSeconds: "1小節の長さです。変更するとBPMも更新されます。",
+  beatsPerMeasure: "1小節に含まれる拍数です。",
+  volume: "音楽再生の音量です。",
 };
 
 const appRoot = document.querySelector<HTMLDivElement>("#app");
@@ -402,17 +435,22 @@ appRoot.innerHTML = `
           </div>
         </div>
       </nav>
+      <div class="mode-toggle" role="group" aria-label="編集モード">
+        <button class="mode-toggle-button is-active" type="button" data-editor-mode="global">全体編集</button>
+        <button class="mode-toggle-button" type="button" data-editor-mode="trajectory">軌跡編集</button>
+        <button class="mode-toggle-button" type="button" data-editor-mode="preview">プレビュー</button>
+      </div>
       <div class="hidden-inputs">
         <input id="import-input" type="file" accept="application/json,.json" hidden />
         <input id="music-input" type="file" accept="audio/*" hidden />
       </div>
       <div class="toolbar-spacer"></div>
-      <div id="time-display" class="time-display">0.00s / ${pattern.duration.toFixed(2)}s</div>
     </header>
 
     <main class="workspace">
       <section class="preview-panel">
         <div id="preview-host"></div>
+        <div id="trajectory-mode-notice" class="trajectory-mode-notice" hidden></div>
       </section>
       <aside class="inspector-panel">
         <div class="inspector-tabs" role="tablist" aria-label="Inspector tabs">
@@ -448,12 +486,16 @@ appRoot.innerHTML = `
         <div class="timeline-title-row">
           <span>タイムライン</span>
           <button id="snap-toggle-button" class="snap-toggle-button" type="button" aria-pressed="false">${iconSvg("magnet")}<span>スナップ</span></button>
+          <button id="add-timeline-lane-button" class="snap-toggle-button" type="button" title="タイムライン行を追加">${iconSvg("rows")}<span>行追加</span></button>
         </div>
         <div class="timeline-playback-tools" aria-label="再生操作">
           <button id="reset-button" class="icon-button" type="button" title="リセット" aria-label="リセット">${iconSvg("rewind")}</button>
           <button id="play-button" class="icon-button" type="button" title="再生" aria-label="再生">${iconSvg("play")}</button>
         </div>
-        <span id="timeline-zoom-display" class="timeline-zoom-display">100%</span>
+        <div class="timeline-status">
+          <div id="time-display" class="time-display">0.00s / ${pattern.duration.toFixed(2)}s</div>
+          <span id="timeline-zoom-display" class="timeline-zoom-display">100%</span>
+        </div>
       </div>
       <div id="timeline-viewport" class="timeline-viewport">
         <div id="timeline-content" class="timeline-content">
@@ -467,11 +509,30 @@ appRoot.innerHTML = `
   </div>
 `;
 
+document.querySelector<HTMLElement>('[data-menu="add"]')?.insertAdjacentHTML("beforeend", renderPackageMenuItems());
+document.querySelector<HTMLElement>("#export-button")?.insertAdjacentHTML(
+  "afterend",
+  `<button id="export-unity-button" class="menu-item" type="button">${iconSvg("download")}<span>Unity向け書き出し</span></button>`,
+);
+document.querySelector<HTMLElement>(".inspector-panel")?.insertAdjacentHTML("afterbegin", '<div id="inspector-resize-handle" class="inspector-resize-handle" aria-hidden="true"></div>');
+document.querySelector<HTMLElement>(".inspector-tabs")?.children[0]?.insertAdjacentHTML(
+  "afterend",
+  `<button class="inspector-tab-button" type="button" data-inspector-tab="package" role="tab" aria-selected="false">${iconSvg("box")}<span>パッケージ</span></button>`,
+);
+document.querySelector<HTMLElement>("#events-tab-panel")?.insertAdjacentHTML(
+  "afterend",
+  '<section id="package-tab-panel" class="inspector-tab-panel" data-inspector-panel="package" role="tabpanel" hidden><div id="package-panel" class="package-panel"></div></section>',
+);
+document.querySelector<HTMLElement>(".timeline-panel")?.insertAdjacentHTML("afterbegin", '<div id="timeline-resize-handle" class="timeline-resize-handle" aria-hidden="true"></div>');
+
 const previewHost = requireElement<HTMLDivElement>("#preview-host");
 const previewPanel = requireElement<HTMLElement>(".preview-panel");
+const trajectoryModeNotice = requireElement<HTMLDivElement>("#trajectory-mode-notice");
+const appShell = requireElement<HTMLDivElement>(".app-shell");
 const playButton = requireElement<HTMLButtonElement>("#play-button");
 const resetButton = requireElement<HTMLButtonElement>("#reset-button");
 const exportButton = requireElement<HTMLButtonElement>("#export-button");
+const exportUnityButton = requireElement<HTMLButtonElement>("#export-unity-button");
 const importButton = requireElement<HTMLButtonElement>("#import-button");
 const musicButton = requireElement<HTMLButtonElement>("#music-button");
 const undoButton = requireElement<HTMLButtonElement>("#undo-button");
@@ -481,12 +542,14 @@ const musicInput = requireElement<HTMLInputElement>("#music-input");
 const timeDisplay = requireElement<HTMLDivElement>("#time-display");
 const musicDisplay = requireElement<HTMLDivElement>("#music-display");
 const eventList = requireElement<HTMLDivElement>("#event-list");
+const packagePanel = requireElement<HTMLDivElement>("#package-panel");
 const propertyForm = requireElement<HTMLFormElement>("#property-form");
 const timelineViewport = requireElement<HTMLDivElement>("#timeline-viewport");
 const timelineContent = requireElement<HTMLDivElement>("#timeline-content");
 const timelineTrack = requireElement<HTMLDivElement>("#timeline-track");
 const timelinePlayhead = requireElement<HTMLDivElement>("#timeline-playhead");
 const snapToggleButton = requireElement<HTMLButtonElement>("#snap-toggle-button");
+const addTimelineLaneButton = requireElement<HTMLButtonElement>("#add-timeline-lane-button");
 const waveformCanvas = requireElement<HTMLCanvasElement>("#waveform-canvas");
 const musicOffsetInput = requireElement<HTMLInputElement>("#music-offset-input");
 const bpmInput = requireElement<HTMLInputElement>("#bpm-input");
@@ -494,13 +557,18 @@ const measureIntervalInput = requireElement<HTMLInputElement>("#measure-interval
 const beatsPerMeasureInput = requireElement<HTMLInputElement>("#beats-per-measure-input");
 const musicVolumeInput = requireElement<HTMLInputElement>("#music-volume-input");
 const timelineZoomDisplay = requireElement<HTMLSpanElement>("#timeline-zoom-display");
+const timelineResizeHandle = requireElement<HTMLDivElement>("#timeline-resize-handle");
+const inspectorResizeHandle = requireElement<HTMLDivElement>("#inspector-resize-handle");
 const menuButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-menu-button]")];
 const menuPopovers = [...document.querySelectorAll<HTMLDivElement>("[data-menu]")];
 const inspectorTabButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-inspector-tab]")];
 const inspectorPanels = [...document.querySelectorAll<HTMLElement>("[data-inspector-panel]")];
+const editorModeButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-editor-mode]")];
 
 const preview = new PreviewStage(pattern.stage);
 await preview.mount(previewHost);
+syncLayoutSizeVariables();
+exportButton.querySelector("span")!.textContent = "プロジェクト書き出し";
 
 audio.addEventListener("loadedmetadata", () => {
   if (Number.isFinite(audio.duration)) {
@@ -529,9 +597,19 @@ inspectorTabButtons.forEach((button) => {
   button.addEventListener("click", () => {
     const nextTab = button.dataset.inspectorTab;
 
-    if (nextTab === "events" || nextTab === "properties" || nextTab === "music") {
+    if (nextTab === "events" || nextTab === "package" || nextTab === "properties" || nextTab === "music") {
       activeInspectorTab = nextTab;
       renderInspectorTabs();
+    }
+  });
+});
+
+editorModeButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const mode = button.dataset.editorMode;
+
+    if (mode === "global" || mode === "trajectory" || mode === "preview") {
+      setEditorMode(mode);
     }
   });
 });
@@ -544,18 +622,67 @@ document.addEventListener("click", (event) => {
   closeMenus();
 });
 
-playButton.addEventListener("click", () => {
+for (const button of [playButton, resetButton]) {
+  button.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+}
+
+playButton.addEventListener("pointerup", (event) => {
+  if (event.button !== 0) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  suppressNextPlayClick = true;
   togglePlayback();
 });
 
-resetButton.addEventListener("click", () => {
+playButton.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (suppressNextPlayClick) {
+    suppressNextPlayClick = false;
+    return;
+  }
+
+  togglePlayback();
+});
+
+resetButton.addEventListener("pointerup", (event) => {
+  if (event.button !== 0) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  suppressNextResetClick = true;
+  resetPlayback();
+  renderEverything();
+});
+
+resetButton.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (suppressNextResetClick) {
+    suppressNextResetClick = false;
+    return;
+  }
+
   resetPlayback();
   renderEverything();
 });
 
 exportButton.addEventListener("click", () => {
   closeMenus();
-  exportPattern();
+  exportProjectPattern();
+});
+
+exportUnityButton.addEventListener("click", () => {
+  closeMenus();
+  exportUnityPattern();
 });
 
 importButton.addEventListener("click", () => {
@@ -581,6 +708,18 @@ redoButton.addEventListener("click", () => {
 snapToggleButton.addEventListener("click", () => {
   snapToMeasures = !snapToMeasures;
   syncUi();
+});
+
+addTimelineLaneButton.addEventListener("click", () => {
+  const currentLaneCount = getTimelineLaneCount();
+
+  if (currentLaneCount >= maximumTimelineLaneCount) {
+    return;
+  }
+
+  pushHistory();
+  pattern.timelineLaneCount = currentLaneCount + 1;
+  renderEverything();
 });
 
 importInput.addEventListener("change", () => {
@@ -631,9 +770,24 @@ window.addEventListener("resize", resizePreviewHost);
 document.querySelectorAll<HTMLButtonElement>("[data-add-kind]").forEach((button) => {
   button.addEventListener("click", () => {
     const kind = button.dataset.addKind as AttackEventKind;
+
+    if (isAttackPackageKind(kind)) {
+      const packageEvent = createAttackPackageEvent(kind, clock.time, pattern.stage);
+      const generatedEvents = createGeneratedEventsForPackage(packageEvent, pattern.stage);
+
+      pushHistory();
+      pattern.events.push(packageEvent, ...generatedEvents);
+      selectedEventId = packageEvent.id;
+      activeInspectorTab = "package";
+      closeMenus();
+      renderEverything();
+      return;
+    }
+
     const event = createAttackEvent(kind, clock.time, pattern.stage);
 
     applyAttackTemplate(event, button.dataset.addTemplate, pattern.stage);
+    ensureEventEditorFields(event);
     pushHistory();
     pattern.events.push(event);
     sortEvents();
@@ -645,6 +799,31 @@ document.querySelectorAll<HTMLButtonElement>("[data-add-kind]").forEach((button)
 
 document.addEventListener("keydown", (event) => {
   const usesCommandKey = event.ctrlKey || event.metaKey;
+
+  if (editorMode === "preview" && !usesCommandKey && !isEditingTarget(event.target)) {
+    if (event.code === "Escape") {
+      event.preventDefault();
+      setEditorMode("global");
+      return;
+    }
+
+    if (isPreviewControlCode(event.code)) {
+      event.preventDefault();
+      pressedPreviewKeys.add(event.code);
+
+      if (event.code === "Space" && !event.repeat) {
+        dashRequested = true;
+      }
+
+      return;
+    }
+  }
+
+  if (!usesCommandKey && !isEditingTarget(event.target) && (event.code === "ArrowUp" || event.code === "ArrowDown")) {
+    event.preventDefault();
+    moveSelectedEventLane(event.code === "ArrowUp" ? -1 : 1);
+    return;
+  }
 
   if (usesCommandKey && !event.altKey && event.code === "KeyZ") {
     event.preventDefault();
@@ -688,6 +867,14 @@ document.addEventListener("keydown", (event) => {
 
   event.preventDefault();
   togglePlayback();
+});
+
+document.addEventListener("keyup", (event) => {
+  if (!isPreviewControlCode(event.code)) {
+    return;
+  }
+
+  pressedPreviewKeys.delete(event.code);
 });
 
 timelineTrack.addEventListener("pointerdown", (event) => {
@@ -739,14 +926,6 @@ propertyForm.addEventListener("click", (event) => {
     return;
   }
 
-  if (target.id === "edit-mode-button") {
-    const selectedEvent = getSelectedEvent();
-
-    editingEventId = editingEventId === selectedEvent?.id ? null : selectedEvent?.id ?? null;
-    renderEverything();
-    return;
-  }
-
   if (target.id !== "delete-event-button") {
     return;
   }
@@ -756,6 +935,14 @@ propertyForm.addEventListener("click", (event) => {
 
 propertyForm.addEventListener("input", handlePropertyUpdate);
 propertyForm.addEventListener("change", handlePropertyUpdate);
+packagePanel.addEventListener("change", handlePackagePanelInput);
+packagePanel.addEventListener("click", handlePackagePanelClick);
+packagePanel.addEventListener("dblclick", handlePackagePanelDoubleClick);
+timelineResizeHandle.addEventListener("pointerdown", (event) => startLayoutResize("timeline", event));
+inspectorResizeHandle.addEventListener("pointerdown", (event) => startLayoutResize("inspector", event));
+document.addEventListener("pointermove", handleLayoutResizeMove);
+document.addEventListener("pointerup", stopLayoutResize);
+document.addEventListener("pointercancel", stopLayoutResize);
 
 function handlePropertyUpdate(event: Event): void {
   const selectedEvent = getSelectedEvent();
@@ -837,6 +1024,10 @@ function handlePropertyUpdate(event: Event): void {
     setNumberField(selectedEvent, config.name, clampedValue);
   }
 
+  if (selectedEvent.packageId && !isAttackPackageEvent(selectedEvent)) {
+    selectedEvent.packageLocked = false;
+  }
+
   clearAimCache();
   sortEvents();
   renderEventList();
@@ -848,7 +1039,119 @@ function handlePropertyUpdate(event: Event): void {
   syncUi();
 }
 
+function handlePackagePanelInput(event: Event): void {
+  const packageEvent = getSelectedPackageEvent();
+  const input = event.target;
+
+  if (!packageEvent || !(input instanceof HTMLInputElement || input instanceof HTMLSelectElement)) {
+    return;
+  }
+
+  if (input.name === "name") {
+    if (input.value === packageEvent.name) {
+      return;
+    }
+
+    pushHistory();
+    packageEvent.name = input.value;
+    refreshPackageGeneratedEvents(packageEvent);
+    renderEverything();
+    return;
+  }
+
+  const config = getPackageFieldConfigs(packageEvent).find((field) => field.name === input.name);
+
+  if (!config) {
+    return;
+  }
+
+  pushHistory();
+  if (config.type === "select") {
+    (packageEvent as unknown as Record<string, string>)[config.name] = input.value;
+  } else {
+    const parsedValue = Number(input.value);
+
+    if (!Number.isFinite(parsedValue)) {
+      return;
+    }
+
+    (packageEvent as unknown as Record<string, number>)[config.name] = config.integer ? Math.round(parsedValue) : parsedValue;
+  }
+
+  refreshPackageGeneratedEvents(packageEvent);
+  selectedEventId = packageEvent.id;
+  clearAimCache();
+  renderEverything();
+}
+
+function handlePackagePanelClick(event: MouseEvent): void {
+  const target = event.target;
+
+  if (!(target instanceof Element)) {
+    return;
+  }
+
+  const visibilityButton = target.closest<HTMLButtonElement>("[data-package-child-visibility]");
+
+  if (visibilityButton) {
+    const child = pattern.events.find((patternEvent) => patternEvent.id === visibilityButton.dataset.packageChildVisibility);
+
+    if (child) {
+      pushHistory();
+      child.visible = !isEventVisible(child);
+      renderEverything();
+    }
+    return;
+  }
+
+  const selectButton = target.closest<HTMLButtonElement>("[data-package-child-select]");
+
+  if (selectButton?.dataset.packageChildSelect) {
+    selectPackageChild(selectButton.dataset.packageChildSelect, false);
+  }
+}
+
+function handlePackagePanelDoubleClick(event: MouseEvent): void {
+  const target = event.target;
+
+  if (!(target instanceof Element)) {
+    return;
+  }
+
+  const selectButton = target.closest<HTMLElement>("[data-package-child-select]");
+
+  if (selectButton?.dataset.packageChildSelect) {
+    selectPackageChild(selectButton.dataset.packageChildSelect, true);
+  }
+}
+
+function selectPackageChild(eventId: string, openProperties: boolean): void {
+  const child = pattern.events.find((event) => event.id === eventId);
+
+  if (!child || isAttackPackageEvent(child)) {
+    return;
+  }
+
+  selectedEventId = child.id;
+
+  if (editorMode === "trajectory") {
+    editingEventId = child.id;
+    clock.seek(child.startTime, pattern.duration);
+    clearAimCache();
+  }
+
+  if (openProperties) {
+    activeInspectorTab = "properties";
+  }
+
+  renderEverything();
+}
+
 preview.onTick((deltaSeconds) => {
+  if (editorMode === "preview") {
+    updatePreviewPlayer(deltaSeconds);
+  }
+
   if (clock.isPlaying && hasMusic()) {
     clock.seek(audio.currentTime, pattern.duration);
 
@@ -998,7 +1301,15 @@ function updateMarkerTimeFromPointer(eventId: string, event: PointerEvent): void
   const bounds = timelineTrack.getBoundingClientRect();
   const ratio = clamp((event.clientX - bounds.left) / bounds.width, 0, 1);
   const rawTime = ratio * pattern.duration;
+  const previousStartTime = attackEvent.startTime;
   attackEvent.startTime = Number(getSnappedEventTime(rawTime).toFixed(2));
+  if (isAttackPackageEvent(attackEvent)) {
+    const delta = attackEvent.startTime - previousStartTime;
+
+    for (const child of getPackageChildren(attackEvent)) {
+      child.startTime = Number((child.startTime + delta).toFixed(2));
+    }
+  }
   clearAimCache();
 
   updateStartTimeInput(attackEvent.startTime);
@@ -1006,14 +1317,40 @@ function updateMarkerTimeFromPointer(eventId: string, event: PointerEvent): void
   renderPreview();
 }
 
-function exportPattern(): void {
-  const data = JSON.stringify(pattern, null, 2);
+function exportProjectPattern(): void {
+  downloadJson(pattern, `${pattern.title.replace(/[^\w-]+/g, "_") || "danmaku_project"}.project.json`);
+}
+
+function exportUnityPattern(): void {
+  const unityPattern: BulletPattern = {
+    ...pattern,
+    title: `${pattern.title} Unity Export`,
+    events: getUnityExportEvents(),
+  };
+
+  downloadJson(unityPattern, `${pattern.title.replace(/[^\w-]+/g, "_") || "danmaku_pattern"}.unity.json`);
+}
+
+function getUnityExportEvents(): AttackEvent[] {
+  return pattern.events
+    .filter((event) => !isAttackPackageEvent(event))
+    .map((event) => {
+      const clonedEvent = structuredClone(event) as AttackEvent;
+
+      delete clonedEvent.packageId;
+      delete clonedEvent.packageLocked;
+      return clonedEvent;
+    });
+}
+
+function downloadJson(value: unknown, fileName: string): void {
+  const data = JSON.stringify(value, null, 2);
   const blob = new Blob([data], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
 
   anchor.href = url;
-  anchor.download = `${pattern.title.replace(/[^\w-]+/g, "_") || "danmaku_pattern"}.json`;
+  anchor.download = fileName;
   anchor.click();
   URL.revokeObjectURL(url);
 }
@@ -1037,6 +1374,7 @@ async function importPattern(file: File): Promise<void> {
         ...defaultTimelineSettings,
         ...parsed.timeline,
       },
+      timelineLaneCount: Number(parsed.timelineLaneCount) || minimumTimelineLaneCount,
       events: parsed.events.map((event) => normalizeImportedEvent(event, parsed.stage!)),
     };
     if (hasMusic()) {
@@ -1081,13 +1419,20 @@ function normalizeImportedEvent(rawEvent: unknown, stage: BulletPattern["stage"]
   const event = rawEvent as Partial<AttackEvent>;
   const kind = typeof event.kind === "string" && isAttackEventKind(event.kind) ? event.kind : "radialBurst";
   const startTime = typeof event.startTime === "number" ? event.startTime : 0;
-  const defaults = createAttackEvent(kind, startTime, stage);
-
-  return {
+  const defaults = isAttackPackageKind(kind) ? createAttackPackageEvent(kind, startTime, stage) : createAttackEvent(kind, startTime, stage);
+  const normalizedEvent = {
     ...defaults,
     ...event,
     kind,
   } as AttackEvent;
+
+  if (isAttackPackageEvent(normalizedEvent)) {
+    normalizedEvent.packageType = normalizedEvent.kind;
+    normalizedEvent.generatedEventIds = Array.isArray(normalizedEvent.generatedEventIds) ? normalizedEvent.generatedEventIds : [];
+  }
+
+  ensureEventEditorFields(normalizedEvent);
+  return normalizedEvent;
 }
 
 function isAttackEventKind(kind: string): kind is AttackEventKind {
@@ -1096,17 +1441,66 @@ function isAttackEventKind(kind: string): kind is AttackEventKind {
 
 function renderEverything(): void {
   ensureTimelineSettings();
+  ensurePatternEditorFields();
+  ensurePackageChildren();
   ensureEditModeState();
+  syncLayoutSizeVariables();
   renderTimelineScale();
   resizePreviewHost();
   renderInspectorTabs();
   renderEventList();
+  renderPackagePanel();
   renderPropertyForm();
   renderTimelineMarkers();
   syncTimelineInputs();
   renderWaveform();
   renderPreview();
   syncUi();
+}
+
+function setEditorMode(mode: EditorMode): void {
+  const wasPreviewMode = editorMode === "preview";
+
+  closeMenus();
+  editorMode = mode;
+
+  if (editorMode === "trajectory") {
+    editingEventId = getTrajectoryEditableEvent(getSelectedEvent())?.id ?? null;
+  } else {
+    editingEventId = null;
+  }
+
+  if (editorMode === "preview") {
+    pressedPreviewKeys.clear();
+    dashRequested = false;
+    dashTimeRemaining = 0;
+    dashCooldownRemaining = 0;
+    playerWasHit = false;
+    preview.setPointerControlEnabled(false);
+    preview.resetPlayerPosition();
+    clock.seek(0, pattern.duration);
+    clock.play();
+
+    if (hasMusic()) {
+      audio.currentTime = 0;
+      void audio.play().catch((error: unknown) => {
+        console.warn("Music playback could not start automatically.", error);
+      });
+    }
+  } else {
+    pressedPreviewKeys.clear();
+    preview.setPointerControlEnabled(editorMode === "global");
+
+    if (editorMode === "trajectory") {
+      preview.resetPlayerPosition();
+    }
+
+    if (wasPreviewMode) {
+      stopPlayback();
+    }
+  }
+
+  renderEverything();
 }
 
 function renderInspectorTabs(): void {
@@ -1124,8 +1518,11 @@ function renderInspectorTabs(): void {
 
 function resizePreviewHost(): void {
   const panelBounds = previewPanel.getBoundingClientRect();
-  const availableWidth = Math.max(1, panelBounds.width - 20);
-  const availableHeight = Math.max(1, panelBounds.height - 20);
+  const panelStyle = window.getComputedStyle(previewPanel);
+  const horizontalPadding = Number.parseFloat(panelStyle.paddingLeft) + Number.parseFloat(panelStyle.paddingRight);
+  const verticalPadding = Number.parseFloat(panelStyle.paddingTop) + Number.parseFloat(panelStyle.paddingBottom);
+  const availableWidth = Math.max(1, panelBounds.width - horizontalPadding);
+  const availableHeight = Math.max(1, panelBounds.height - verticalPadding);
   const stageRatio = pattern.stage.width / pattern.stage.height;
   let width = availableWidth;
   let height = width / stageRatio;
@@ -1137,33 +1534,81 @@ function resizePreviewHost(): void {
 
   previewHost.style.width = `${Math.floor(width)}px`;
   previewHost.style.height = `${Math.floor(height)}px`;
+  preview.resize(width, height);
 }
 
 function ensureEditModeState(): void {
+  if (editorMode === "trajectory") {
+    editingEventId = getTrajectoryEditableEvent(getSelectedEvent())?.id ?? null;
+    preview.setPointerControlEnabled(false);
+    preview.resetPlayerPosition();
+  } else {
+    editingEventId = null;
+  }
+
   if (editingEventId && !pattern.events.some((event) => event.id === editingEventId)) {
     editingEventId = null;
   }
 }
 
 function renderPreview(): void {
+  syncTrajectoryModeNotice();
   const previewEvents = getPreviewEvents();
-  const editingEvent = getEditingEvent();
+  const playerPosition = preview.getPlayerPosition();
+  const frame = buildAttackFrame(previewEvents, clock.time, pattern.stage, playerPosition);
+
+  if (editorMode === "preview") {
+    updatePreviewHitState(frame, playerPosition);
+  } else {
+    playerWasHit = false;
+  }
 
   preview.render({
-    frame: buildAttackFrame(previewEvents, clock.time, pattern.stage, preview.getPlayerPosition()),
+    frame,
     currentTime: clock.time,
     duration: pattern.duration,
     events: previewEvents,
     selectedEventId,
     editEventId: editingEventId,
-    trajectories: editingEvent ? buildEditTrajectories(editingEvent) : [],
+    trajectories: buildVisibleTrajectories(),
+    playerAlpha: dashTimeRemaining > 0 ? 0.45 : 1,
   });
 }
 
 function getPreviewEvents(): AttackEvent[] {
   const editingEvent = getEditingEvent();
+  const events = editorMode === "trajectory" ? (editingEvent ? [editingEvent] : []) : pattern.events;
 
-  return editingEvent ? [editingEvent] : pattern.events;
+  return events.filter((event) => !isAttackPackageEvent(event) && isEventVisible(event) && isParentPackageVisible(event));
+}
+
+function syncTrajectoryModeNotice(): void {
+  const message = getTrajectoryModeNotice();
+
+  trajectoryModeNotice.hidden = message === null;
+  trajectoryModeNotice.textContent = message ?? "";
+}
+
+function getTrajectoryModeNotice(): string | null {
+  if (editorMode !== "trajectory" || editingEventId) {
+    return null;
+  }
+
+  const selectedEvent = getSelectedEvent();
+
+  if (!selectedEvent) {
+    return "軌跡編集: 表示するAttackを選択してください。";
+  }
+
+  if (isAttackPackageEvent(selectedEvent)) {
+    return "軌跡編集: パッケージタブのGenerated AttacksからAttackを選択してください。";
+  }
+
+  return "軌跡編集: このAttackは軌跡表示に対応していません。";
+}
+
+function getTrajectoryEditableEvent(event: AttackEvent | undefined): AttackEvent | undefined {
+  return event && !isAttackPackageEvent(event) ? event : undefined;
 }
 
 function getEditingEvent(): AttackEvent | undefined {
@@ -1174,17 +1619,28 @@ function getEditingEvent(): AttackEvent | undefined {
   return pattern.events.find((event) => event.id === editingEventId);
 }
 
+function buildVisibleTrajectories(): TrajectoryRender[] {
+  if (editorMode !== "trajectory") {
+    return [];
+  }
+
+  const editingEvent = getEditingEvent();
+
+  return editingEvent ? buildEditTrajectories(editingEvent) : [];
+}
+
 function buildEditTrajectories(event: AttackEvent): TrajectoryRender[] {
-  const startTime = Math.max(0, event.startTime);
-  const endTime = Math.min(pattern.duration, getEventEndTime(event));
+  const trajectoryEvent = createTrajectorySampleEvent(event);
+  const startTime = Math.max(0, trajectoryEvent.startTime);
+  const endTime = Math.min(pattern.duration, getEventEndTime(trajectoryEvent));
   const duration = Math.max(0.1, endTime - startTime);
-  const sampleCount = Math.max(96, Math.min(360, Math.ceil(duration * 60)));
+  const sampleCount = Math.max(72, Math.min(180, Math.ceil(duration * 36)));
   const tracks = new Map<string, TrajectoryRender>();
-  const playerPosition = preview.getPlayerPosition();
+  const playerPosition = getFixedPreviewPlayerPosition();
 
   for (let sampleIndex = 0; sampleIndex <= sampleCount; sampleIndex += 1) {
     const time = startTime + (duration * sampleIndex) / sampleCount;
-    const frame = buildAttackFrame([event], time, pattern.stage, playerPosition);
+    const frame = buildAttackFrame([trajectoryEvent], time, pattern.stage, playerPosition);
 
     frame.bullets.forEach((bullet, bulletIndex) => {
       const trackId = bullet.trackId ?? `${bullet.eventId}:${bulletIndex}`;
@@ -1221,13 +1677,255 @@ function buildEditTrajectories(event: AttackEvent): TrajectoryRender[] {
   return Array.from(tracks.values()).filter((trajectory) => trajectory.points.length > 1);
 }
 
+function createTrajectorySampleEvent(event: AttackEvent): AttackEvent {
+  const sampleEvent = structuredClone(event) as AttackEvent & Record<string, number>;
+
+  for (const repeatField of ["clipRepeat", "radialRepeat", "repeatCount", "fireCount", "switchCount"]) {
+    if (repeatField in sampleEvent) {
+      sampleEvent[repeatField] = 1;
+    }
+  }
+
+  return sampleEvent as AttackEvent;
+}
+
+function getFixedPreviewPlayerPosition(): { x: number; y: number } {
+  return {
+    x: pattern.stage.width / 2,
+    y: pattern.stage.height * 0.72,
+  };
+}
+
+function updatePreviewPlayer(deltaSeconds: number): void {
+  const direction = getPreviewMoveDirection();
+  const hasDirection = Math.hypot(direction.x, direction.y) > 0.001;
+
+  if (hasDirection) {
+    lastPreviewDirection.x = direction.x;
+    lastPreviewDirection.y = direction.y;
+  }
+
+  dashCooldownRemaining = Math.max(0, dashCooldownRemaining - deltaSeconds);
+  dashTimeRemaining = Math.max(0, dashTimeRemaining - deltaSeconds);
+
+  if (dashRequested && dashCooldownRemaining <= 0) {
+    dashTimeRemaining = previewDashDuration;
+    dashCooldownRemaining = previewDashCooldown;
+  }
+
+  dashRequested = false;
+
+  const dashActive = dashTimeRemaining > 0;
+  const moveDirection = hasDirection ? direction : dashActive ? lastPreviewDirection : { x: 0, y: 0 };
+  const speed = dashActive ? previewDashSpeed : previewMoveSpeed;
+
+  preview.movePlayer(moveDirection.x * speed * deltaSeconds, moveDirection.y * speed * deltaSeconds);
+}
+
+function getPreviewMoveDirection(): { x: number; y: number } {
+  let x = 0;
+  let y = 0;
+
+  if (pressedPreviewKeys.has("ArrowLeft") || pressedPreviewKeys.has("KeyA")) {
+    x -= 1;
+  }
+
+  if (pressedPreviewKeys.has("ArrowRight") || pressedPreviewKeys.has("KeyD")) {
+    x += 1;
+  }
+
+  if (pressedPreviewKeys.has("ArrowUp") || pressedPreviewKeys.has("KeyW")) {
+    y -= 1;
+  }
+
+  if (pressedPreviewKeys.has("ArrowDown") || pressedPreviewKeys.has("KeyS")) {
+    y += 1;
+  }
+
+  const length = Math.hypot(x, y);
+
+  return length > 0 ? { x: x / length, y: y / length } : { x: 0, y: 0 };
+}
+
+function isPreviewControlCode(code: string): boolean {
+  return (
+    code === "ArrowLeft" ||
+    code === "ArrowRight" ||
+    code === "ArrowUp" ||
+    code === "ArrowDown" ||
+    code === "KeyA" ||
+    code === "KeyD" ||
+    code === "KeyW" ||
+    code === "KeyS" ||
+    code === "Space"
+  );
+}
+
+function updatePreviewHitState(frame: AttackFrame, playerPosition: { x: number; y: number }): void {
+  if (dashTimeRemaining > 0) {
+    playerWasHit = false;
+    return;
+  }
+
+  const isHit = isPlayerCollidingWithFrame(frame, playerPosition);
+
+  if (isHit && !playerWasHit) {
+    preview.triggerHitShake();
+  }
+
+  playerWasHit = isHit;
+}
+
+function isPlayerCollidingWithFrame(frame: AttackFrame, playerPosition: { x: number; y: number }): boolean {
+  return (
+    frame.bullets.some((bullet) => isPointNearBullet(playerPosition, bullet)) ||
+    frame.walls.some((wall) => isPointInWall(playerPosition, wall)) ||
+    frame.lasers.some((laser) => isPointInLaser(playerPosition, laser)) ||
+    frame.curvedLasers.some((laser) => isPointInCurvedLaser(playerPosition, laser)) ||
+    frame.hazards.some((hazard) => isPointInHazard(playerPosition, hazard)) ||
+    frame.shapes.some((shape) => isPointInShape(playerPosition, shape))
+  );
+}
+
+function isPointNearBullet(point: { x: number; y: number }, bullet: AttackFrame["bullets"][number]): boolean {
+  const padding = playerHitSize / 2;
+
+  if (bullet.width !== undefined || bullet.height !== undefined) {
+    const width = Math.max(1, bullet.width ?? bullet.radius * 2) + padding * 2;
+    const height = Math.max(1, bullet.height ?? bullet.radius * 2) + padding * 2;
+
+    return isPointInRotatedRect(point, bullet.x, bullet.y, width, height, bullet.angle ?? 0);
+  }
+
+  return Math.hypot(point.x - bullet.x, point.y - bullet.y) <= bullet.radius + padding;
+}
+
+function isPointInWall(point: { x: number; y: number }, wall: WallRender): boolean {
+  const padding = playerHitSize / 2;
+
+  return point.x >= wall.x - padding && point.x <= wall.x + wall.width + padding && point.y >= wall.y - padding && point.y <= wall.y + wall.height + padding;
+}
+
+function isPointInLaser(point: { x: number; y: number }, laser: LaserRender): boolean {
+  return isPointInRotatedRect(point, laser.x, laser.y, laser.length + playerHitSize, laser.width + playerHitSize, degreesToRadians(laser.angle));
+}
+
+function isPointInCurvedLaser(point: { x: number; y: number }, laser: CurvedLaserRender): boolean {
+  const threshold = laser.width / 2 + playerHitSize / 2;
+
+  for (let index = 1; index < laser.points.length; index += 1) {
+    const start = laser.points[index - 1];
+    const end = laser.points[index];
+
+    if (distanceToSegment(point, start, end) <= threshold) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isPointInHazard(point: { x: number; y: number }, hazard: HazardRender): boolean {
+  const padding = playerHitSize / 2;
+
+  if (hazard.shape === "circle") {
+    return Math.hypot(point.x - hazard.x, point.y - hazard.y) <= hazard.radius + padding;
+  }
+
+  if (hazard.shape === "rectangle" || hazard.shape === "square" || hazard.shape === "line") {
+    return isPointInRotatedRect(point, hazard.x, hazard.y, hazard.width + padding * 2, hazard.height + padding * 2, degreesToRadians(hazard.rotation));
+  }
+
+  return Math.hypot(point.x - hazard.x, point.y - hazard.y) <= hazard.radius + padding;
+}
+
+function isPointInShape(point: { x: number; y: number }, shape: ShapeRender): boolean {
+  return Math.hypot(point.x - shape.x, point.y - shape.y) <= shape.radius + playerHitSize / 2;
+}
+
+function isPointInRotatedRect(point: { x: number; y: number }, centerX: number, centerY: number, width: number, height: number, angleRadians: number): boolean {
+  const cos = Math.cos(-angleRadians);
+  const sin = Math.sin(-angleRadians);
+  const dx = point.x - centerX;
+  const dy = point.y - centerY;
+  const localX = dx * cos - dy * sin;
+  const localY = dx * sin + dy * cos;
+
+  return Math.abs(localX) <= width / 2 && Math.abs(localY) <= height / 2;
+}
+
+function distanceToSegment(point: { x: number; y: number }, start: { x: number; y: number }, end: { x: number; y: number }): number {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+
+  if (lengthSquared <= 0) {
+    return Math.hypot(point.x - start.x, point.y - start.y);
+  }
+
+  const t = clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared, 0, 1);
+  const closestX = start.x + dx * t;
+  const closestY = start.y + dy * t;
+
+  return Math.hypot(point.x - closestX, point.y - closestY);
+}
+
+function degreesToRadians(degrees: number): number {
+  return (degrees * Math.PI) / 180;
+}
+
 function syncUi(): void {
+  appShell.classList.toggle("is-preview-mode", editorMode === "preview");
+  for (const button of editorModeButtons) {
+    const isActive = button.dataset.editorMode === editorMode;
+
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+  }
+
   timeDisplay.textContent = `${clock.time.toFixed(2)}s / ${pattern.duration.toFixed(2)}s`;
   timelinePlayhead.style.left = `${(clock.time / pattern.duration) * 100}%`;
   syncPlaybackButton();
   syncHistoryButtons();
   syncSnapButton();
+  addTimelineLaneButton.disabled = getTimelineLaneCount() >= maximumTimelineLaneCount;
   musicDisplay.classList.toggle("has-music", hasMusic());
+}
+
+function syncLayoutSizeVariables(): void {
+  appShell.style.setProperty("--timeline-height", `${timelinePanelHeight}px`);
+  appShell.style.setProperty("--inspector-width", `${inspectorPanelWidth}px`);
+}
+
+function startLayoutResize(target: "timeline" | "inspector", event: PointerEvent): void {
+  activeResizeTarget = target;
+  event.preventDefault();
+  document.body.classList.add("is-resizing-layout");
+}
+
+function handleLayoutResizeMove(event: PointerEvent): void {
+  if (!activeResizeTarget) {
+    return;
+  }
+
+  if (activeResizeTarget === "timeline") {
+    timelinePanelHeight = clamp(window.innerHeight - event.clientY, 96, Math.min(420, window.innerHeight * 0.52));
+  } else {
+    inspectorPanelWidth = clamp(window.innerWidth - event.clientX, 300, Math.min(680, window.innerWidth * 0.5));
+  }
+
+  syncLayoutSizeVariables();
+  resizePreviewHost();
+  resizeTimelineToViewport();
+}
+
+function stopLayoutResize(): void {
+  if (!activeResizeTarget) {
+    return;
+  }
+
+  activeResizeTarget = null;
+  document.body.classList.remove("is-resizing-layout");
 }
 
 function syncPlaybackButton(): void {
@@ -1295,6 +1993,7 @@ function clonePattern(source: BulletPattern): BulletPattern {
 function restorePattern(snapshot: BulletPattern): void {
   pattern = clonePattern(snapshot);
   ensureTimelineSettings();
+  ensurePatternEditorFields();
   clearAimCache();
 
   if (hasMusic()) {
@@ -1306,15 +2005,15 @@ function restorePattern(snapshot: BulletPattern): void {
     syncAudioToClock();
   }
 
-    if (!pattern.events.some((event) => event.id === selectedEventId)) {
-      selectedEventId = pattern.events[0]?.id ?? null;
-    }
+  if (!pattern.events.some((event) => event.id === selectedEventId)) {
+    selectedEventId = pattern.events[0]?.id ?? null;
+  }
 
-    if (!pattern.events.some((event) => event.id === editingEventId)) {
-      editingEventId = null;
-    }
+  if (!pattern.events.some((event) => event.id === editingEventId)) {
+    editingEventId = editorMode === "trajectory" ? getTrajectoryEditableEvent(getSelectedEvent())?.id ?? null : null;
+  }
 
-    renderEverything();
+  renderEverything();
 }
 
 function toggleMenu(menuName: string): void {
@@ -1338,38 +2037,49 @@ function closeMenus(): void {
 function renderEventList(): void {
   eventList.innerHTML = "";
 
-  for (const event of pattern.events) {
-    const card = document.createElement("button");
+  for (const event of pattern.events.filter((patternEvent) => !patternEvent.packageId)) {
+    const card = document.createElement("div");
     const endTime = getEventEndTime(event);
-    const isLockedByEditMode = editingEventId !== null && event.id !== editingEventId;
+    const isMutedByEditMode = editorMode === "trajectory" && editingEventId !== null && event.id !== editingEventId;
+    const isVisible = isEventVisible(event);
 
-    card.className = `event-card ${event.id === selectedEventId ? "is-selected" : ""} ${isLockedByEditMode ? "is-disabled" : ""}`;
-    card.type = "button";
-    card.disabled = isLockedByEditMode;
+    card.className = `event-card ${event.id === selectedEventId ? "is-selected" : ""} ${isMutedByEditMode ? "is-muted" : ""} ${!isVisible ? "is-hidden" : ""}`;
     card.innerHTML = `
-      <div class="event-card-main">
+      <button class="event-card-main" type="button">
         <div class="event-card-title">
           <span class="event-swatch" style="background: ${formatColor(event.color)}"></span>
           <span>${escapeHtml(event.name)}</span>
         </div>
         <span class="event-time">${event.startTime.toFixed(2)}s - ${endTime.toFixed(2)}s</span>
+        <span class="event-lane">L${getEventTimelineLane(event) + 1}</span>
+      </button>
+      <div class="event-card-actions">
+        <button class="event-action-button ${isVisible ? "is-active" : ""}" type="button" title="${isVisible ? "非表示にする" : "表示する"}" aria-label="${isVisible ? "非表示にする" : "表示する"}" data-event-action="visibility">
+          ${iconSvg(isVisible ? "eye" : "eyeOff")}
+        </button>
       </div>
     `;
-    card.addEventListener("click", () => {
-      if (editingEventId && event.id !== editingEventId) {
-        return;
-      }
+    const mainButton = card.querySelector<HTMLButtonElement>(".event-card-main");
+    const visibilityButton = card.querySelector<HTMLButtonElement>('[data-event-action="visibility"]');
 
+    mainButton?.addEventListener("click", () => {
       selectedEventId = event.id;
+      if (editorMode === "trajectory") {
+        editingEventId = getTrajectoryEditableEvent(event)?.id ?? null;
+      }
       renderEverything();
     });
-    card.addEventListener("dblclick", () => {
-      if (editingEventId && event.id !== editingEventId) {
-        return;
-      }
-
+    mainButton?.addEventListener("dblclick", () => {
       selectedEventId = event.id;
+      if (editorMode === "trajectory") {
+        editingEventId = getTrajectoryEditableEvent(event)?.id ?? null;
+      }
       activeInspectorTab = "properties";
+      renderEverything();
+    });
+    visibilityButton?.addEventListener("click", () => {
+      pushHistory();
+      event.visible = !isEventVisible(event);
       renderEverything();
     });
     eventList.appendChild(card);
@@ -1377,6 +2087,10 @@ function renderEventList(): void {
 }
 
 function getEventEndTime(event: AttackEvent): number {
+  if (isAttackPackageEvent(event)) {
+    return event.startTime + event.duration;
+  }
+
   switch (event.kind) {
     case "spawn_bullet_spread":
     case "spawn_aimed_spread":
@@ -1419,6 +2133,11 @@ function renderPropertyForm(): void {
     return;
   }
 
+  if (isAttackPackageEvent(selectedEvent)) {
+    propertyForm.innerHTML = `<p class="empty-state">パッケージタブで、このパッケージの設定と生成される弾幕を編集できます。</p>`;
+    return;
+  }
+
   const propertyGroupsHtml = renderPropertyGroups(selectedEvent);
 
   propertyForm.innerHTML = `
@@ -1430,9 +2149,6 @@ function renderPropertyForm(): void {
       <button class="time-mode-button ${propertyTimeMode === "seconds" ? "is-active" : ""}" type="button" data-time-mode="seconds">seconds</button>
       <button class="time-mode-button ${propertyTimeMode === "beats" ? "is-active" : ""}" type="button" data-time-mode="beats">beats</button>
     </div>
-    <button id="edit-mode-button" class="edit-mode-button ${editingEventId === selectedEvent.id ? "is-active" : ""}" type="button">
-      ${editingEventId === selectedEvent.id ? "Exit edit mode" : "Edit trajectory"}
-    </button>
     ${propertyGroupsHtml}
     <button id="delete-event-button" class="danger-button" type="button">Delete selected event</button>
   `;
@@ -1478,8 +2194,125 @@ function renderPropertyGroups(event: AttackEvent): string {
     .join("");
 }
 
+function renderPackagePanel(): void {
+  const selectedEvent = getSelectedEvent();
+  const packageEvent = isAttackPackageEvent(selectedEvent) ? selectedEvent : getParentPackage(selectedEvent);
+
+  if (!packageEvent) {
+    packagePanel.innerHTML = `<p class="empty-state">パッケージを選択すると、生成される弾幕一覧とパッケージ設定を編集できます。</p>`;
+    return;
+  }
+
+  const childEvents = getPackageChildren(packageEvent);
+  const fields = getPackageFieldConfigs(packageEvent);
+
+  packagePanel.innerHTML = `
+    <div class="property-event-name">
+      <input class="event-name-input" name="name" type="text" value="${escapeHtml(packageEvent.name)}" aria-label="package name" />
+    </div>
+    <div class="property-group">
+      <h3>Package</h3>
+      <div class="property-group-fields">
+        ${fields.map((field) => renderPackageField(packageEvent, field)).join("")}
+      </div>
+    </div>
+    <div class="property-group">
+      <h3>Generated Attacks</h3>
+      <div class="package-child-list">
+        ${childEvents.map((child) => renderPackageChildCard(child)).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderPackageMenuItems(): string {
+  return packageKinds
+    .map((kind) => `<button class="menu-item package-menu-item" type="button" data-add-kind="${kind}">${iconSvg("package")}<span>${getPackageKindLabel(kind)}</span></button>`)
+    .join("");
+}
+
+function renderPackageField(event: AttackPackageEvent, field: PackageFieldConfig): string {
+  const value = (event as unknown as Record<string, string | number>)[field.name];
+  const title = getPropertyTooltip(field.name);
+
+  if (field.type === "select") {
+    return `
+      <label class="property-field">
+        <span title="${title}">${field.label}</span>
+        <select name="${field.name}">
+          ${(field.options ?? []).map((option) => `<option value="${option.value}" ${String(value) === option.value ? "selected" : ""}>${option.label}</option>`).join("")}
+        </select>
+      </label>
+    `;
+  }
+
+  return `
+    <label class="property-field">
+      <span title="${title}">${field.label}</span>
+      <input name="${field.name}" type="number" step="${field.step ?? 0.01}" value="${formatPropertyNumber(Number(value ?? 0))}" />
+    </label>
+  `;
+}
+
+function renderPackageChildCard(event: AttackEvent): string {
+  const isVisible = isEventVisible(event);
+  const isSelected = event.id === selectedEventId;
+
+  return `
+    <div class="event-card package-child-card ${isSelected ? "is-selected" : ""} ${!isVisible ? "is-hidden" : ""}" data-package-child-id="${event.id}">
+      <button class="event-card-main" type="button" data-package-child-select="${event.id}">
+        <div class="event-card-title">
+          <span class="event-swatch" style="background: ${formatColor(event.color)}"></span>
+          <span>${escapeHtml(event.name)}</span>
+        </div>
+        <span class="event-time">${event.startTime.toFixed(2)}s - ${getEventEndTime(event).toFixed(2)}s</span>
+        <span class="event-lane">${event.packageLocked === false ? "Free" : "Auto"}</span>
+      </button>
+      <div class="event-card-actions">
+        <button class="event-action-button ${isVisible ? "is-active" : ""}" type="button" data-package-child-visibility="${event.id}" title="${isVisible ? "非表示" : "表示"}">
+          ${iconSvg(isVisible ? "eye" : "eyeOff")}
+        </button>
+      </div>
+    </div>
+  `;
+}
+
 function getPropertyDescription(name: string): string {
-  return propertyDescriptions[name] ?? "Parameter for the selected attack preset.";
+  if (name.startsWith("package")) {
+    const packageDescriptions: Record<string, string> = {
+      packageCount: "パッケージ内で生成する攻撃や弾の数です。",
+      packageStartX: "ボムなどが最初に出現するX座標です。",
+      packageStartY: "ボムなどが最初に出現するY座標です。",
+      packageAngleWidth: "ランダム発射やボム破裂で使う角度の広がりです。",
+      packageInterval: "繰り返し生成する間隔です。",
+      packageThickness: "レーザーやバーの太さです。",
+      packageOrientation: "水平または垂直の向きです。",
+      packageX: "生成エリアや発射点のX座標です。",
+      packageY: "生成エリアや発射点のY座標です。",
+      packageWidth: "ランダム生成エリアの幅です。",
+      packageHeight: "ランダム生成エリアの高さです。",
+      packageSize: "円、四角、正方形弾などの基本サイズです。",
+      packageDuration: "生成される攻撃ひとつ分の継続時間です。",
+      packageFuseTime: "ボムが出現してから破裂するまでの時間です。",
+      packageBulletCount: "一度に放つ弾の数です。",
+      packageSpeed: "生成される弾やバーの移動速度です。",
+      packageDistance: "連続レーザー同士の距離です。",
+      packageRotationSpeed: "回転レーザーの回転速度です。",
+      packageWarningTime: "本体攻撃の前に表示する予告時間です。",
+      packageWarningAlpha: "パッケージから自動生成されるWarning表示の透明度です。",
+      packageSpacing: "スネーク状の弾同士の時間差です。",
+      packageInitialPosition: "入退場バーや時間差レーザーの最初の位置です。",
+      packageLength: "レーザーやバーの長さです。",
+      packagePolynomialA: "スネーク正方形の軌道 y = ax^4 + bx^3 + cx^2 + dx の x 項です。x と y は100px単位です。",
+      packagePolynomialB: "スネーク正方形の軌道 y = ax^4 + bx^3 + cx^2 + dx の x^2 項です。x と y は100px単位です。",
+      packagePolynomialC: "スネーク正方形の軌道 y = ax^4 + bx^3 + cx^2 + dx の x^3 項です。x と y は100px単位です。",
+      packagePolynomialD: "スネーク正方形の軌道 y = ax^4 + bx^3 + cx^2 + dx の x^4 項です。x と y は100px単位です。",
+    };
+
+    return packageDescriptions[name] ?? "パッケージ内の攻撃を自動生成するための設定です。";
+  }
+
+  return propertyDescriptions[name] ?? "選択中の攻撃プリセットで使用するパラメータです。";
 }
 
 function getPropertyTooltip(name: string): string {
@@ -1559,6 +2392,11 @@ function renderNumberFields(event: AttackEvent, fields: NumberFieldConfig[]): st
       renderedFields.add(fieldName);
     }
 
+    if (group.label === "polynomial") {
+      fragments.push(renderPolynomialFormulaField(event, groupFields as NumberFieldConfig[]));
+      continue;
+    }
+
     fragments.push(`
       <label class="property-field property-compact-field">
         <span title="${getCompactFieldTooltip(group.fields)}">${group.label}</span>
@@ -1585,6 +2423,37 @@ function renderNumberFields(event: AttackEvent, fields: NumberFieldConfig[]): st
   return fragments.join("");
 }
 
+function renderPolynomialFormulaField(event: AttackEvent, fields: NumberFieldConfig[]): string {
+  const termLabels: Record<string, string> = {
+    polynomialD: "x^4",
+    polynomialC: "x^3",
+    polynomialB: "x^2",
+    polynomialA: "x",
+  };
+
+  return `
+    <div class="property-field property-polynomial-field">
+      <span title="${getCompactFieldTooltip(fields.map((field) => field.name))}">polynomial</span>
+      <div class="polynomial-editor" aria-label="polynomial curve">
+        <div class="polynomial-expression" title="${escapeHtml("x と y は100px単位です。例: y = 1x なら45度の直線になります。")}">
+          <span>y =</span>
+          ${fields
+            .map(
+              (field, index) => `
+                <span class="polynomial-term">
+                  ${renderNumberInput(event, field, getDisplayFieldLabel(field))}
+                  <span>${termLabels[field.name] ?? field.name}</span>
+                </span>
+                ${index < fields.length - 1 ? '<span class="polynomial-plus">+</span>' : ""}
+              `,
+            )
+            .join("")}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderNumberInput(event: AttackEvent, field: NumberFieldConfig, ariaLabel = field.name): string {
   return `
     <input
@@ -1601,12 +2470,26 @@ function renderNumberInput(event: AttackEvent, field: NumberFieldConfig, ariaLab
 }
 
 function renderTimelineMarkers(): void {
-  timelineTrack.querySelectorAll(".timeline-marker, .timeline-event-range, .beat-grid-line").forEach((marker) => marker.remove());
+  const laneCount = getTimelineLaneCount();
+
+  timelineTrack.style.setProperty("--timeline-lane-count", String(laneCount));
+  timelineTrack.querySelectorAll(".timeline-marker, .timeline-event-range, .beat-grid-line, .timeline-lane-row").forEach((marker) => marker.remove());
+
+  for (let lane = 0; lane < laneCount; lane += 1) {
+    const row = document.createElement("div");
+
+    row.className = "timeline-lane-row";
+    row.style.setProperty("--timeline-lane-index", String(lane));
+    timelineTrack.appendChild(row);
+  }
+
   renderGridLines(timelineTrack, "track");
 
-  for (const event of pattern.events) {
+  for (const event of pattern.events.filter((patternEvent) => !patternEvent.packageId)) {
     const marker = document.createElement("button");
-    const isLockedByEditMode = editingEventId !== null && event.id !== editingEventId;
+    const isMutedByEditMode = editorMode === "trajectory" && editingEventId !== null && event.id !== editingEventId;
+    const isVisible = isEventVisible(event);
+    const laneIndex = getEventTimelineLane(event);
     const startRatio = clamp(event.startTime / pattern.duration, 0, 1);
     const endTime = getEventEndTime(event);
     const endRatio = clamp(endTime / pattern.duration, startRatio, 1);
@@ -1614,26 +2497,26 @@ function renderTimelineMarkers(): void {
     const rangeWidthRatio = Math.max(endRatio - startRatio, minimumRangeRatio);
     const range = document.createElement("div");
 
-    range.className = `timeline-event-range ${event.id === selectedEventId ? "is-selected" : ""} ${isLockedByEditMode ? "is-disabled" : ""}`;
+    range.className = `timeline-event-range ${event.id === selectedEventId ? "is-selected" : ""} ${isMutedByEditMode ? "is-muted" : ""} ${!isVisible ? "is-hidden" : ""}`;
     range.title = `${event.name} ${event.startTime.toFixed(2)}s - ${endTime.toFixed(2)}s`;
     range.style.left = `${startRatio * 100}%`;
     range.style.width = `${Math.min(rangeWidthRatio, 1 - startRatio) * 100}%`;
     range.style.setProperty("--marker-color", formatColor(event.color));
+    range.style.setProperty("--timeline-lane-index", String(laneIndex));
     timelineTrack.appendChild(range);
 
     marker.type = "button";
-    marker.className = `timeline-marker ${event.id === selectedEventId ? "is-selected" : ""} ${isLockedByEditMode ? "is-disabled" : ""}`;
+    marker.className = `timeline-marker ${event.id === selectedEventId ? "is-selected" : ""} ${isMutedByEditMode ? "is-muted" : ""} ${!isVisible ? "is-hidden" : ""}`;
     marker.title = `${event.name} (${event.startTime.toFixed(2)}s - ${endTime.toFixed(2)}s)`;
-    marker.disabled = isLockedByEditMode;
     marker.style.left = `${startRatio * 100}%`;
     marker.style.setProperty("--marker-color", formatColor(event.color));
+    marker.style.setProperty("--timeline-lane-index", String(laneIndex));
     marker.addEventListener("pointerdown", (pointerEvent) => {
-      if (editingEventId && event.id !== editingEventId) {
-        return;
-      }
-
       pointerEvent.stopPropagation();
       selectedEventId = event.id;
+      if (editorMode === "trajectory") {
+        editingEventId = getTrajectoryEditableEvent(event)?.id ?? null;
+      }
       markerDraggingId = event.id;
       markerDragMoved = false;
       markerDragHistoryRecorded = false;
@@ -1704,16 +2587,15 @@ function renderTimelineMarkers(): void {
       renderEverything();
     });
     marker.addEventListener("click", () => {
-      if (editingEventId && event.id !== editingEventId) {
-        return;
-      }
-
       if (markerDragMoved) {
         markerDragMoved = false;
         return;
       }
 
       selectedEventId = event.id;
+      if (editorMode === "trajectory") {
+        editingEventId = getTrajectoryEditableEvent(event)?.id ?? null;
+      }
       renderEverything();
     });
     timelineTrack.appendChild(marker);
@@ -1797,19 +2679,19 @@ function getFieldMin(field: NumberFieldConfig): number {
 
 function getDisplayFieldLabel(field: NumberFieldConfig): string {
   if (field.name === "polynomialA") {
-    return "polynomial t";
+    return "polynomial x";
   }
 
   if (field.name === "polynomialB") {
-    return "polynomial t^2";
+    return "polynomial x^2";
   }
 
   if (field.name === "polynomialC") {
-    return "polynomial t^3";
+    return "polynomial x^3";
   }
 
   if (field.name === "polynomialD") {
-    return "polynomial t^4";
+    return "polynomial x^4";
   }
 
   if (propertyTimeMode !== "beats" || !isTimeField(field.name)) {
@@ -1948,6 +2830,75 @@ function ensureTimelineSettings(): void {
   pattern.timeline.beatsPerMeasure = Math.round(clamp(pattern.timeline.beatsPerMeasure, 1, 16));
 }
 
+function ensurePatternEditorFields(): void {
+  for (const event of pattern.events) {
+    ensureEventEditorFields(event);
+  }
+
+  pattern.timelineLaneCount = getTimelineLaneCount();
+
+  for (const event of pattern.events) {
+    event.timelineLane = getEventTimelineLane(event);
+  }
+}
+
+function ensureEventEditorFields(event: AttackEvent): void {
+  event.visible = event.visible !== false;
+  delete (event as AttackEvent & { showTrajectory?: boolean }).showTrajectory;
+  event.timelineLane = Math.max(0, Math.round(Number(event.timelineLane) || 0));
+
+  if (["movingBlock", "wallSweep", "beatPulseRing", "closingWalls", "safeLaneShift"].includes(event.kind)) {
+    const warningEvent = event as AttackEvent & { warningAlpha?: number };
+    warningEvent.warningAlpha = Number.isFinite(warningEvent.warningAlpha) ? warningEvent.warningAlpha : 0.72;
+  }
+}
+
+function getTimelineLaneCount(): number {
+  const configuredLaneCount = Number(pattern.timelineLaneCount);
+  const maxEventLane = pattern.events.reduce((maxLane, event) => Math.max(maxLane, readEventTimelineLane(event)), 0);
+  const requestedLaneCount = Number.isFinite(configuredLaneCount) ? configuredLaneCount : minimumTimelineLaneCount;
+
+  return Math.round(clamp(Math.max(requestedLaneCount, maxEventLane + 1), minimumTimelineLaneCount, maximumTimelineLaneCount));
+}
+
+function readEventTimelineLane(event: AttackEvent): number {
+  const lane = Number(event.timelineLane);
+
+  return Number.isFinite(lane) ? Math.max(0, Math.round(lane)) : 0;
+}
+
+function getEventTimelineLane(event: AttackEvent): number {
+  return Math.round(clamp(readEventTimelineLane(event), 0, getTimelineLaneCount() - 1));
+}
+
+function isEventVisible(event: AttackEvent): boolean {
+  return event.visible !== false;
+}
+
+function moveSelectedEventLane(delta: number): void {
+  const selectedEvent = getSelectedEvent();
+
+  if (!selectedEvent || (editingEventId && selectedEvent.id !== editingEventId)) {
+    return;
+  }
+
+  const currentLane = getEventTimelineLane(selectedEvent);
+  const nextLane = Math.round(clamp(currentLane + delta, 0, getTimelineLaneCount() - 1));
+
+  if (nextLane === currentLane) {
+    return;
+  }
+
+  pushHistory();
+  selectedEvent.timelineLane = nextLane;
+  if (isAttackPackageEvent(selectedEvent)) {
+    for (const child of getPackageChildren(selectedEvent)) {
+      child.timelineLane = nextLane;
+    }
+  }
+  renderEverything();
+}
+
 function parseTimelineNumber(value: string, fallback: number): number {
   const parsed = Number(value);
 
@@ -1998,6 +2949,12 @@ function handleTimelineWheel(event: WheelEvent): void {
   if (event.ctrlKey) {
     event.preventDefault();
     zoomTimelineFromWheel(event);
+    return;
+  }
+
+  if (event.shiftKey) {
+    event.preventDefault();
+    timelineViewport.scrollTop += event.deltaY;
     return;
   }
 
@@ -2269,7 +3226,7 @@ function deleteSelectedEvent(): void {
   const deletedIndex = pattern.events.findIndex((event) => event.id === selectedEvent.id);
 
   pushHistory();
-  pattern.events = pattern.events.filter((event) => event.id !== selectedEvent.id);
+  pattern.events = pattern.events.filter((event) => event.id !== selectedEvent.id && event.packageId !== selectedEvent.id);
 
   if (editingEventId === selectedEvent.id) {
     editingEventId = null;
@@ -2298,8 +3255,18 @@ function pasteCopiedEvent(): void {
   event.id = `${event.id}_copy_${Date.now().toString(36)}`;
   event.name = `${event.name} Copy`;
   event.startTime = Number(clamp(clock.time, 0, pattern.duration).toFixed(2));
+  ensureEventEditorFields(event);
   pushHistory();
-  pattern.events.push(event);
+  if (isAttackPackageEvent(event)) {
+    event.packageId = undefined;
+    event.generatedEventIds = [];
+    pattern.events.push(event, ...createGeneratedEventsForPackage(event, pattern.stage));
+    activeInspectorTab = "package";
+  } else {
+    event.packageId = undefined;
+    event.packageLocked = undefined;
+    pattern.events.push(event);
+  }
   selectedEventId = event.id;
   sortEvents();
   renderEverything();
@@ -2307,6 +3274,61 @@ function pasteCopiedEvent(): void {
 
 function sortEvents(): void {
   pattern.events.sort((a, b) => a.startTime - b.startTime);
+}
+
+function getSelectedPackageEvent(): AttackPackageEvent | undefined {
+  const selectedEvent = getSelectedEvent();
+
+  return isAttackPackageEvent(selectedEvent) ? selectedEvent : getParentPackage(selectedEvent);
+}
+
+function getParentPackage(event: AttackEvent | undefined): AttackPackageEvent | undefined {
+  if (!event?.packageId) {
+    return undefined;
+  }
+
+  return pattern.events.find((candidate): candidate is AttackPackageEvent => candidate.id === event.packageId && isAttackPackageEvent(candidate));
+}
+
+function getPackageChildren(packageEvent: AttackPackageEvent): AttackEvent[] {
+  const order = new Map(packageEvent.generatedEventIds.map((id, index) => [id, index]));
+
+  return pattern.events
+    .filter((event) => event.packageId === packageEvent.id)
+    .sort((a, b) => (order.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.id) ?? Number.MAX_SAFE_INTEGER));
+}
+
+function refreshPackageGeneratedEvents(packageEvent: AttackPackageEvent): void {
+  pattern.events = pattern.events.filter((event) => event.packageId !== packageEvent.id);
+  pattern.events.push(...createGeneratedEventsForPackage(packageEvent, pattern.stage));
+  sortEvents();
+}
+
+function ensurePackageChildren(): void {
+  const generatedEvents: AttackEvent[] = [];
+
+  for (const event of pattern.events) {
+    if (!isAttackPackageEvent(event)) {
+      continue;
+    }
+
+    const childCount = pattern.events.filter((candidate) => candidate.packageId === event.id).length;
+
+    if (childCount === 0) {
+      generatedEvents.push(...createGeneratedEventsForPackage(event, pattern.stage));
+    }
+  }
+
+  if (generatedEvents.length > 0) {
+    pattern.events.push(...generatedEvents);
+    sortEvents();
+  }
+}
+
+function isParentPackageVisible(event: AttackEvent): boolean {
+  const parent = getParentPackage(event);
+
+  return parent ? isEventVisible(parent) : true;
 }
 
 function allKinds(): AttackEventKind[] {
@@ -2332,6 +3354,7 @@ function allKinds(): AttackEventKind[] {
     "wallSweep",
     "laserBeam",
     "rotatingShape",
+    ...packageKinds,
   ];
 }
 
@@ -2348,6 +3371,10 @@ function unityMotionKinds(): AttackEventKind[] {
 }
 
 function eventKindLabel(kind: AttackEventKind): string {
+  if (isAttackPackageKind(kind)) {
+    return getPackageKindLabel(kind);
+  }
+
   switch (kind) {
     case "spawn_bullet":
       return "単発/図形弾";
@@ -2458,7 +3485,13 @@ function iconSvg(name: string): string {
     download: '<path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path>',
     upload: '<path d="M12 21V9"></path><path d="m7 14 5-5 5 5"></path><path d="M5 3h14"></path>',
     music: '<path d="M9 18V5l11-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="17" cy="16" r="3"></circle>',
+    box: '<path d="M21 8 12 3 3 8l9 5 9-5z"></path><path d="M3 8v8l9 5 9-5V8"></path><path d="M12 13v8"></path>',
+    package: '<path d="M16 3h5v5"></path><path d="M8 3H3v5"></path><path d="M3 16v5h5"></path><path d="M21 16v5h-5"></path><rect x="8" y="8" width="8" height="8" rx="1"></rect>',
     volume: '<path d="M4 10v4h4l5 4V6l-5 4H4z"></path><path d="M16 9c1 .8 1.5 1.8 1.5 3s-.5 2.2-1.5 3"></path><path d="M18.5 6.5A8 8 0 0 1 21 12a8 8 0 0 1-2.5 5.5"></path>',
+    eye: '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle>',
+    eyeOff: '<path d="M3 3l18 18"></path><path d="M10.6 10.6A2 2 0 0 0 12 14a2 2 0 0 0 1.4-.6"></path><path d="M9.8 5.4A10.7 10.7 0 0 1 12 5c6.5 0 10 7 10 7a18 18 0 0 1-3.3 4.2"></path><path d="M6.6 6.8C3.7 8.7 2 12 2 12s3.5 7 10 7c1.3 0 2.5-.3 3.6-.7"></path>',
+    route: '<circle cx="5" cy="6" r="2"></circle><circle cx="19" cy="18" r="2"></circle><path d="M7 6h4a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h8"></path>',
+    rows: '<path d="M4 6h16"></path><path d="M4 12h16"></path><path d="M4 18h16"></path><path d="M8 3v18"></path>',
     circle: '<circle cx="12" cy="12" r="7"></circle><path d="M12 2v3"></path><path d="M12 19v3"></path><path d="M2 12h3"></path><path d="M19 12h3"></path>',
     wall: '<path d="M4 5h16v14H4z"></path><path d="M4 10h16"></path><path d="M9 5v5"></path><path d="M15 10v9"></path>',
     laser: '<path d="M4 12h16"></path><path d="m16 8 4 4-4 4"></path><path d="M4 8v8"></path>',

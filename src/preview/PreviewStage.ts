@@ -1,4 +1,4 @@
-import { Application, Graphics, Text } from "pixi.js";
+import { Application, Graphics } from "pixi.js";
 import type { AttackEvent, AttackFrame, BulletRender, CurvedLaserRender, HazardRender, LaserRender, ShapeRender, StageSize } from "../core/types";
 
 interface PreviewRenderState {
@@ -9,6 +9,7 @@ interface PreviewRenderState {
   selectedEventId?: string | null;
   editEventId?: string | null;
   trajectories?: TrajectoryRender[];
+  playerAlpha?: number;
 }
 
 interface TrajectoryRender {
@@ -23,23 +24,20 @@ export class PreviewStage {
   private readonly eventLayer = new Graphics();
   private readonly trajectoryLayer = new Graphics();
   private readonly attackLayer = new Graphics();
+  private readonly hitEffectLayer = new Graphics();
   private readonly playerLayer = new Graphics();
   private playerPosition: { x: number; y: number };
-  private readonly hudText = new Text({
-    text: "00.00s",
-    style: {
-      fill: 0xffffff,
-      fontFamily: "Inter, system-ui, sans-serif",
-      fontSize: 18,
-      fontWeight: "700",
-    },
-  });
+  private pointerControlEnabled = true;
+  private shakeUntil = 0;
+  private hitEffectUntil = 0;
+  private hitEffectPosition: { x: number; y: number };
 
   constructor(private readonly stageSize: StageSize) {
     this.playerPosition = {
       x: stageSize.width / 2,
       y: stageSize.height * 0.72,
     };
+    this.hitEffectPosition = { ...this.playerPosition };
   }
 
   async mount(parent: HTMLElement): Promise<void> {
@@ -59,11 +57,15 @@ export class PreviewStage {
     this.app.stage.addChild(this.eventLayer);
     this.app.stage.addChild(this.trajectoryLayer);
     this.app.stage.addChild(this.attackLayer);
+    this.app.stage.addChild(this.hitEffectLayer);
     this.app.stage.addChild(this.playerLayer);
-    this.app.stage.addChild(this.hudText);
 
     this.drawBackground();
     this.app.canvas.addEventListener("pointermove", (event) => {
+      if (!this.pointerControlEnabled) {
+        return;
+      }
+
       const bounds = this.app.canvas.getBoundingClientRect();
       const x = ((event.clientX - bounds.left) / bounds.width) * this.stageSize.width;
       const y = ((event.clientY - bounds.top) / bounds.height) * this.stageSize.height;
@@ -74,7 +76,6 @@ export class PreviewStage {
       };
     });
 
-    this.hudText.position.set(20, 18);
   }
 
   onTick(callback: (deltaSeconds: number) => void): void {
@@ -91,12 +92,55 @@ export class PreviewStage {
     return { ...this.playerPosition };
   }
 
+  setPointerControlEnabled(enabled: boolean): void {
+    this.pointerControlEnabled = enabled;
+  }
+
+  setPlayerPosition(x: number, y: number): void {
+    this.playerPosition = {
+      x: clamp(x, 0, this.stageSize.width),
+      y: clamp(y, 0, this.stageSize.height),
+    };
+  }
+
+  movePlayer(dx: number, dy: number): void {
+    this.setPlayerPosition(this.playerPosition.x + dx, this.playerPosition.y + dy);
+  }
+
+  resetPlayerPosition(): void {
+    this.setPlayerPosition(this.stageSize.width / 2, this.stageSize.height * 0.72);
+  }
+
+  resize(cssWidth: number, cssHeight: number): void {
+    this.app.canvas.style.width = `${Math.max(1, Math.floor(cssWidth))}px`;
+    this.app.canvas.style.height = `${Math.max(1, Math.floor(cssHeight))}px`;
+  }
+
+  triggerHitShake(): void {
+    this.shakeUntil = Math.max(this.shakeUntil, performance.now() + 180);
+    this.hitEffectUntil = Math.max(this.hitEffectUntil, performance.now() + 360);
+    this.hitEffectPosition = { ...this.playerPosition };
+  }
+
   render(state: PreviewRenderState): void {
+    this.applyShake();
     this.drawEvents(state.events, state.currentTime, state.selectedEventId ?? null, state.editEventId ?? null);
     this.drawTrajectories(state.trajectories ?? []);
     this.drawAttackFrame(state.frame);
-    this.drawPlayer();
-    this.hudText.text = `${state.currentTime.toFixed(2)}s / ${state.duration.toFixed(2)}s`;
+    this.drawHitEffect();
+    this.drawPlayer(state.playerAlpha ?? 1);
+  }
+
+  private applyShake(): void {
+    const remaining = this.shakeUntil - performance.now();
+
+    if (remaining <= 0) {
+      this.app.stage.position.set(0, 0);
+      return;
+    }
+
+    const power = Math.max(0, Math.min(1, remaining / 180)) * 5;
+    this.app.stage.position.set((Math.random() - 0.5) * power, (Math.random() - 0.5) * power);
   }
 
   private drawBackground(): void {
@@ -111,20 +155,11 @@ export class PreviewStage {
   }
 
   private drawEvents(events: AttackEvent[], currentTime: number, selectedEventId: string | null, editEventId: string | null): void {
+    void events;
+    void currentTime;
+    void selectedEventId;
+    void editEventId;
     this.eventLayer.clear();
-
-    for (const event of events) {
-      const timeDistance = event.startTime - currentTime;
-      const isSelected = event.id === selectedEventId;
-      const isEditTarget = event.id === editEventId;
-      const alpha = isEditTarget ? 0.95 : isSelected ? 0.85 : timeDistance > 0 ? Math.max(0.12, 0.45 - timeDistance * 0.1) : 0.18;
-      const radius = isSelected ? 26 : 18;
-      const width = isSelected ? 4 : 2;
-      const point = getEventAnchor(event, this.stageSize);
-
-      this.eventLayer.circle(point.x, point.y, radius).stroke({ width, color: 0xffffff, alpha: Math.min(0.72, alpha) });
-      this.eventLayer.circle(point.x, point.y, 5).fill({ color: event.color, alpha: Math.min(1, alpha + 0.1) });
-    }
   }
 
   private drawTrajectories(trajectories: TrajectoryRender[]): void {
@@ -167,12 +202,7 @@ export class PreviewStage {
     for (const wall of frame.walls) {
       this.attackLayer.rect(wall.x, wall.y, wall.width, wall.height).fill({
         color: wall.color,
-        alpha: 1,
-      });
-      this.attackLayer.rect(wall.x, wall.y, wall.width, wall.height).stroke({
-        width: 3,
-        color: 0xffffff,
-        alpha: 0.32,
+        alpha: wall.alpha,
       });
     }
 
@@ -193,14 +223,32 @@ export class PreviewStage {
     }
   }
 
-  private drawPlayer(): void {
+  private drawPlayer(alpha: number): void {
     const { x, y } = this.playerPosition;
-    const size = 16;
+    const size = 12;
 
     this.playerLayer.clear();
-    this.playerLayer.rect(x - size / 2, y - size / 2, size, size).fill({ color: 0x31e8ff, alpha: 1 });
-    this.playerLayer.rect(x - size / 2, y - size / 2, size, size).stroke({ width: 3, color: 0xffffff, alpha: 0.86 });
-    this.playerLayer.circle(x, y, 3).fill({ color: 0x050505, alpha: 1 });
+    this.playerLayer.rect(x - size / 2, y - size / 2, size, size).fill({ color: 0x27dfff, alpha });
+  }
+
+  private drawHitEffect(): void {
+    const remaining = this.hitEffectUntil - performance.now();
+
+    this.hitEffectLayer.clear();
+
+    if (remaining <= 0) {
+      return;
+    }
+
+    const duration = 360;
+    const progress = 1 - clamp(remaining / duration, 0, 1);
+    const fade = 1 - progress;
+    const radius = 20 + progress * 90;
+    const { x, y } = this.hitEffectPosition;
+
+    this.hitEffectLayer.rect(0, 0, this.stageSize.width, this.stageSize.height).fill({ color: 0xff2f4f, alpha: 0.16 * fade });
+    this.hitEffectLayer.circle(x, y, radius).stroke({ width: Math.max(2, 7 * fade), color: 0xffffff, alpha: 0.8 * fade });
+    this.hitEffectLayer.circle(x, y, radius * 0.55).stroke({ width: Math.max(1, 4 * fade), color: 0xff2f4f, alpha: 0.9 * fade });
   }
 
   private drawBullet(bullet: BulletRender): void {
@@ -213,7 +261,6 @@ export class PreviewStage {
       const points = buildRotatedRectPoints(bullet.x, bullet.y, width, height, angleDegrees);
 
       this.attackLayer.poly(points).fill({ color: bullet.color, alpha: bullet.alpha });
-      this.attackLayer.poly(points).stroke({ width: 2, color: 0xffffff, alpha: 0.28 });
       return;
     }
 
@@ -222,7 +269,6 @@ export class PreviewStage {
       const points = buildRotatedRectPoints(bullet.x, bullet.y, size, Math.max(1, bullet.height ?? size), angleDegrees);
 
       this.attackLayer.poly(points).fill({ color: bullet.color, alpha: bullet.alpha });
-      this.attackLayer.poly(points).stroke({ width: 2, color: 0xffffff, alpha: 0.28 });
       return;
     }
 
@@ -230,13 +276,12 @@ export class PreviewStage {
       const points = buildDiamondPoints(
         bullet.x,
         bullet.y,
-        Math.max(1, (bullet.width ?? bullet.radius * 2) * 0.52),
-        Math.max(1, (bullet.height ?? bullet.radius * 2) * 0.86),
+        Math.max(1, (bullet.width ?? bullet.radius * 2) / 2),
+        Math.max(1, (bullet.height ?? bullet.radius * 2) / 2),
         angleDegrees,
       );
 
       this.attackLayer.poly(points).fill({ color: bullet.color, alpha: bullet.alpha });
-      this.attackLayer.poly(points).stroke({ width: 2, color: 0xffffff, alpha: 0.28 });
       return;
     }
 
@@ -244,43 +289,36 @@ export class PreviewStage {
       color: bullet.color,
       alpha: bullet.alpha,
     });
-    this.attackLayer.circle(bullet.x, bullet.y, bullet.radius).stroke({
-      width: 1,
-      color: 0xffffff,
-      alpha: 0.34,
-    });
-
-    if (bullet.angle !== undefined && bullet.radius >= 4) {
-      const tipX = bullet.x + Math.cos(bullet.angle) * bullet.radius * 0.85;
-      const tipY = bullet.y + Math.sin(bullet.angle) * bullet.radius * 0.85;
-
-      this.attackLayer.moveTo(bullet.x, bullet.y);
-      this.attackLayer.lineTo(tipX, tipY);
-      this.attackLayer.stroke({ width: 2, color: 0xffffff, alpha: 0.62 });
-    }
   }
 
   private drawHazard(hazard: HazardRender): void {
-    const alpha = hazard.isWarning ? hazard.alpha : 1;
-    const strokeAlpha = hazard.isWarning ? Math.min(1, hazard.alpha + 0.18) : 0.34;
+    const alpha = hazard.alpha;
+    const strokeAlpha = Math.min(1, hazard.alpha + 0.18);
 
     if (hazard.shape === "circle") {
       if (hazard.filled) {
         this.attackLayer.circle(hazard.x, hazard.y, hazard.radius).fill({ color: hazard.color, alpha });
       }
 
-      this.attackLayer.circle(hazard.x, hazard.y, hazard.radius).stroke({
-        width: hazard.strokeWidth,
-        color: hazard.isWarning ? hazard.color : 0xffffff,
-        alpha: strokeAlpha,
-      });
+      if (hazard.isWarning || !hazard.filled) {
+        this.attackLayer.circle(hazard.x, hazard.y, hazard.radius).stroke({
+          width: hazard.strokeWidth,
+          color: hazard.color,
+          alpha: strokeAlpha,
+        });
+      }
+      return;
+    }
+
+    if (hazard.shape === "line") {
+      const linePoints = buildRotatedRectPoints(hazard.x, hazard.y, hazard.width, hazard.strokeWidth, hazard.rotation);
+
+      this.attackLayer.poly(linePoints).fill({ color: hazard.color, alpha: strokeAlpha });
       return;
     }
 
     const points =
-      hazard.shape === "line"
-        ? buildRotatedRectPoints(hazard.x, hazard.y, hazard.width, hazard.strokeWidth, hazard.rotation)
-        : hazard.shape === "rectangle" || hazard.shape === "square"
+      hazard.shape === "rectangle" || hazard.shape === "square"
           ? buildRotatedRectPoints(hazard.x, hazard.y, hazard.width, hazard.height, hazard.rotation)
           : buildRegularPolygonPoints(hazard.x, hazard.y, hazard.radius, hazard.sides, hazard.rotation, hazard.shape === "triangle" ? 3 : undefined);
 
@@ -288,11 +326,13 @@ export class PreviewStage {
       this.attackLayer.poly(points).fill({ color: hazard.color, alpha });
     }
 
-    this.attackLayer.poly(points).stroke({
-      width: hazard.strokeWidth,
-      color: hazard.isWarning ? hazard.color : 0xffffff,
-      alpha: strokeAlpha,
-    });
+    if (hazard.isWarning || !hazard.filled) {
+      this.attackLayer.poly(points).stroke({
+        width: hazard.strokeWidth,
+        color: hazard.color,
+        alpha: strokeAlpha,
+      });
+    }
   }
 
   private drawLaser(laser: LaserRender): void {
@@ -300,33 +340,29 @@ export class PreviewStage {
 
     this.attackLayer.poly(points).fill({
       color: laser.color,
-      alpha: 1,
-    });
-    this.attackLayer.poly(points).stroke({
-      width: 3,
-      color: 0xffffff,
-      alpha: 0.3,
+      alpha: laser.alpha,
     });
   }
 
   private drawCurvedLaser(laser: CurvedLaserRender): void {
-    for (let index = 1; index < laser.points.length; index += 1) {
-      const start = laser.points[index - 1];
-      const end = laser.points[index];
-      const points = buildSegmentRectPoints(start.x, start.y, end.x, end.y, laser.width);
-
-      this.attackLayer.poly(points).fill({
-        color: laser.color,
-        alpha: laser.alpha,
-      });
+    if (laser.points.length < 2) {
+      return;
     }
 
-    for (const point of laser.points) {
-      this.attackLayer.circle(point.x, point.y, laser.width / 2).fill({
-        color: laser.color,
-        alpha: laser.alpha,
-      });
+    const [firstPoint, ...restPoints] = laser.points;
+
+    this.attackLayer.moveTo(firstPoint.x, firstPoint.y);
+
+    for (const point of restPoints) {
+      this.attackLayer.lineTo(point.x, point.y);
     }
+
+    this.attackLayer.stroke({ width: laser.width, color: laser.color, alpha: laser.alpha });
+
+    const lastPoint = laser.points[laser.points.length - 1];
+
+    this.attackLayer.circle(firstPoint.x, firstPoint.y, laser.width / 2).fill({ color: laser.color, alpha: laser.alpha });
+    this.attackLayer.circle(lastPoint.x, lastPoint.y, laser.width / 2).fill({ color: laser.color, alpha: laser.alpha });
   }
 
   private drawShape(shape: ShapeRender): void {
@@ -339,12 +375,7 @@ export class PreviewStage {
 
     this.attackLayer.poly(points).fill({
       color: shape.color,
-      alpha: 1,
-    });
-    this.attackLayer.poly(points).stroke({
-      width: 3,
-      color: 0xffffff,
-      alpha: 0.32,
+      alpha: shape.alpha,
     });
   }
 }
@@ -400,6 +431,8 @@ function getEventAnchor(event: AttackEvent, stage: StageSize): { x: number; y: n
         ? { x: event.edge === "left" ? 24 : stage.width - 24, y: event.offset }
         : { x: event.offset, y: event.edge === "top" ? 24 : stage.height - 24 };
   }
+
+  return "packageX" in event ? { x: event.packageX, y: event.packageY } : { x: stage.width / 2, y: stage.height / 2 };
 }
 
 function buildSegmentRectPoints(startX: number, startY: number, endX: number, endY: number, width: number): number[] {

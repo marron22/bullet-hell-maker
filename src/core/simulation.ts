@@ -32,6 +32,7 @@ import type {
 } from "./types";
 
 const lockedAimAngles = new Map<string, number>();
+const polynomialUnitScale = 100;
 
 export function clearAimCache(): void {
   lockedAimAngles.clear();
@@ -327,8 +328,17 @@ function buildTransformBulletCue(event: TransformBulletEvent, time: number, stag
   ];
 }
 
-function buildMotionBullet(event: BulletMotionFields, age: number, angleDegrees: number, eventId: string, color: number, trackId: string): BulletRender {
+function buildMotionBullet(
+  event: BulletMotionFields & { duration: number },
+  age: number,
+  angleDegrees: number,
+  eventId: string,
+  color: number,
+  trackId: string,
+): BulletRender {
   const motion = evaluateMotion(event, age, angleDegrees);
+  const typeId = Math.round(event.typeId ?? 0);
+  const vanishScale = typeId === 4 || typeId === 3 ? getEndVanishScale(age, event.duration) : 1;
 
   return {
     eventId,
@@ -340,9 +350,9 @@ function buildMotionBullet(event: BulletMotionFields, age: number, angleDegrees:
     typeId: event.typeId,
     visualPreset: event.visualPreset,
     width: event.visualWidth,
-    height: event.visualHeight,
+    height: typeId === 4 ? event.visualHeight * vanishScale : event.visualHeight,
     color,
-    alpha: 1,
+    alpha: vanishScale,
   };
 }
 
@@ -389,31 +399,33 @@ function evaluateMotionVectorAngle(event: BulletMotionFields, age: number, angle
 }
 
 function evaluatePolynomialPath(event: BulletMotionFields, age: number): { x: number; y: number; slope: number } {
-  const speed = Math.max(0, event.pathSpeed);
-  const curveAge = speed <= 0 ? 0 : solveCurveAgeForTravel(event, age);
-  const x = event.pathStartX + speed * curveAge;
-  const dyDt = polynomialDerivative(event, curveAge);
-  const slope = speed <= 0 ? 0 : dyDt / speed;
+  const parameter = event.pathSpeed <= 0 ? getPolynomialStartParameter(event) : solveCurveParameterForTravel(event, age);
+  const x = parameter * polynomialUnitScale;
+  const y = polynomialValue(event, parameter) * polynomialUnitScale;
+  const dyDx = polynomialDerivative(event, parameter);
 
   return {
     x,
-    y: polynomialValue(event, curveAge),
-    slope,
+    y,
+    slope: dyDx,
   };
 }
 
-function solveCurveAgeForTravel(event: BulletMotionFields, age: number): number {
+function solveCurveParameterForTravel(event: BulletMotionFields, age: number): number {
   const targetLength = Math.max(0, event.pathSpeed * age);
+  const startParameter = getPolynomialStartParameter(event);
 
   if (targetLength <= 0) {
-    return 0;
+    return startParameter;
   }
 
-  let low = 0;
-  let high = Math.max(0.001, age);
+  let low = startParameter;
+  let high = startParameter + Math.max(0.001, targetLength / polynomialUnitScale);
+  let expansionCount = 0;
 
-  while (approximateCurveLength(event, high) < targetLength && high < Math.max(1, age) * 8) {
-    high *= 2;
+  while (approximateCurveLength(event, high) < targetLength && expansionCount < 16) {
+    high = startParameter + (high - startParameter) * 2;
+    expansionCount += 1;
   }
 
   for (let index = 0; index < 10; index += 1) {
@@ -430,17 +442,18 @@ function solveCurveAgeForTravel(event: BulletMotionFields, age: number): number 
   return (low + high) / 2;
 }
 
-function approximateCurveLength(event: BulletMotionFields, curveAge: number): number {
-  const speed = Math.max(0, event.pathSpeed);
-  const segments = Math.max(4, Math.min(36, Math.ceil(Math.max(0.1, curveAge) * 12)));
+function approximateCurveLength(event: BulletMotionFields, endParameter: number): number {
+  const startParameter = getPolynomialStartParameter(event);
+  const parameterDistance = Math.abs(endParameter - startParameter);
+  const segments = Math.max(4, Math.min(64, Math.ceil(parameterDistance * 16)));
   let length = 0;
-  let previousX = event.pathStartX;
-  let previousY = polynomialValue(event, 0);
+  let previousX = startParameter * polynomialUnitScale;
+  let previousY = polynomialValue(event, startParameter) * polynomialUnitScale;
 
   for (let index = 1; index <= segments; index += 1) {
-    const t = (curveAge * index) / segments;
-    const x = event.pathStartX + speed * t;
-    const y = polynomialValue(event, t);
+    const parameter = startParameter + (endParameter - startParameter) * (index / segments);
+    const x = parameter * polynomialUnitScale;
+    const y = polynomialValue(event, parameter) * polynomialUnitScale;
 
     length += Math.hypot(x - previousX, y - previousY);
     previousX = x;
@@ -448,6 +461,10 @@ function approximateCurveLength(event: BulletMotionFields, curveAge: number): nu
   }
 
   return length;
+}
+
+function getPolynomialStartParameter(event: BulletMotionFields): number {
+  return event.pathStartX / polynomialUnitScale;
 }
 
 function buildMotionPathPoints(event: BulletMotionFields, length: number, angleDegrees: number, age: number): Array<{ x: number; y: number }> {
@@ -482,6 +499,17 @@ function isActiveAge(age: number, duration: number): boolean {
   return age >= 0 && age <= duration;
 }
 
+function getEndVanishScale(age: number, duration: number): number {
+  const vanishTime = Math.min(0.11, Math.max(0.025, duration * 0.11));
+  const remaining = duration - age;
+
+  if (remaining >= vanishTime) {
+    return 1;
+  }
+
+  return clamp(remaining / vanishTime, 0, 1);
+}
+
 function buildWarningZone(event: WarningZoneEvent, time: number): HazardRender[] {
   const age = time - event.startTime;
 
@@ -512,7 +540,7 @@ function buildWarningZone(event: WarningZoneEvent, time: number): HazardRender[]
 }
 
 function buildMovingBlockWarning(event: MovingBlockEvent, time: number): HazardRender[] {
-  const alpha = getWarningAlpha(event.startTime, event.warningTime, time);
+  const alpha = getWarningAlpha(event.startTime, event.warningTime, time, event.warningAlpha);
 
   if (alpha <= 0) {
     return [];
@@ -534,19 +562,20 @@ function buildMovingBlock(event: MovingBlockEvent, time: number): HazardRender |
   const progress = easeInOut(clamp(age / event.duration, 0, 1));
   const x = lerp(event.startX, event.endX, progress);
   const y = lerp(event.startY, event.endY, progress);
+  const vanishScale = getEndVanishScale(age, event.duration);
 
-  return createBlockHazard(event, x, y, event.rotationStart + event.rotationSpeed * age, 1, false);
+  return createBlockHazard(event, x, y, event.rotationStart + event.rotationSpeed * age, vanishScale, false, vanishScale);
 }
 
-function createBlockHazard(event: MovingBlockEvent, x: number, y: number, rotation: number, alpha: number, isWarning: boolean): HazardRender {
+function createBlockHazard(event: MovingBlockEvent, x: number, y: number, rotation: number, alpha: number, isWarning: boolean, scale = 1): HazardRender {
   return createHazard({
     eventId: event.id,
     shape: event.shape,
     x,
     y,
-    width: event.width,
-    height: event.height,
-    radius: event.radius,
+    width: event.width * scale,
+    height: event.height * scale,
+    radius: event.radius * scale,
     rotation,
     sides: event.sides,
     strokeWidth: isWarning ? 4 : 2,
@@ -558,7 +587,7 @@ function createBlockHazard(event: MovingBlockEvent, x: number, y: number, rotati
 }
 
 function buildBeatPulseWarnings(event: BeatPulseRingEvent, time: number): HazardRender[] {
-  const alpha = getWarningAlpha(event.startTime, event.warningTime, time);
+  const alpha = getWarningAlpha(event.startTime, event.warningTime, time, event.warningAlpha);
 
   if (alpha <= 0) {
     return [];
@@ -607,7 +636,7 @@ function createPulseHazard(event: BeatPulseRingEvent, size: number, alpha: numbe
 }
 
 function buildClosingWallsWarning(event: ClosingWallsEvent, time: number, stage: StageSize): HazardRender[] {
-  const alpha = getWarningAlpha(event.startTime, event.warningTime, time);
+  const alpha = getWarningAlpha(event.startTime, event.warningTime, time, event.warningAlpha);
 
   if (alpha <= 0) {
     return [];
@@ -669,7 +698,7 @@ function getClosingWallDistance(event: ClosingWallsEvent, age: number): number {
 }
 
 function buildSafeLaneWarning(event: SafeLaneShiftEvent, time: number, stage: StageSize): HazardRender[] {
-  const alpha = getWarningAlpha(event.startTime, event.warningTime, time);
+  const alpha = getWarningAlpha(event.startTime, event.warningTime, time, event.warningAlpha);
 
   if (alpha <= 0) {
     return [];
@@ -886,7 +915,7 @@ function buildCurvedLaserRing(event: CurvedLaserRingEvent, time: number): Curved
   const lasers: CurvedLaserRender[] = [];
   const count = Math.max(1, Math.round(event.laserCount));
   const visibleLength = Math.min(event.length, Math.max(0, event.extendSpeed * age));
-  const segments = 18;
+  const segments = Math.max(32, Math.min(180, Math.ceil(visibleLength / 8)));
   const alpha = Math.min(1, 0.35 + age / Math.max(0.1, event.duration) * 0.9);
 
   if (visibleLength <= 0) {
@@ -898,17 +927,20 @@ function buildCurvedLaserRing(event: CurvedLaserRingEvent, time: number): Curved
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
     const points: Array<{ x: number; y: number }> = [];
-
-    for (let segment = 0; segment <= segments; segment += 1) {
-      const progress = segment / segments;
-      const localX = visibleLength * progress;
-      const normalized = localX / Math.max(1, event.length);
+    const pushPoint = (distance: number): void => {
+      const normalized = distance / Math.max(1, event.length);
       const localY = event.curveA * normalized * normalized + event.curveB * normalized * normalized * normalized;
 
       points.push({
-        x: event.x + localX * cos - localY * sin,
-        y: event.y + localX * sin + localY * cos,
+        x: event.x + distance * cos - localY * sin,
+        y: event.y + distance * sin + localY * cos,
       });
+    };
+
+    for (let segment = 0; segment <= segments; segment += 1) {
+      const distance = visibleLength * (segment / segments);
+
+      pushPoint(distance);
     }
 
     lasers.push({
@@ -957,7 +989,7 @@ function buildLinearSpread(
 }
 
 function buildWallSweepWarning(event: WallSweepEvent, time: number, stage: StageSize): HazardRender[] {
-  const alpha = getWarningAlpha(event.startTime, event.warningTime, time);
+  const alpha = getWarningAlpha(event.startTime, event.warningTime, time, event.warningAlpha);
 
   if (alpha <= 0) {
     return [];
@@ -1054,16 +1086,17 @@ function buildLaserBeam(event: LaserBeamEvent, time: number) {
   }
 
   const pulse = 0.75 + Math.sin(age * 22) * 0.18;
+  const vanishScale = getEndVanishScale(age, event.duration);
 
   return {
     eventId: event.id,
     x: event.x,
     y: event.y,
     length: event.length,
-    width: event.width,
+    width: event.width * vanishScale,
     angle: event.angle,
     color: event.color,
-    alpha: Math.min(1, pulse),
+    alpha: Math.min(1, pulse) * vanishScale,
   };
 }
 
@@ -1112,7 +1145,7 @@ function createHazard(hazard: HazardRender): HazardRender {
   return hazard;
 }
 
-function getWarningAlpha(startTime: number, warningTime: number, time: number): number {
+function getWarningAlpha(startTime: number, warningTime: number, time: number, maxAlpha = 0.72): number {
   if (warningTime <= 0 || time < startTime - warningTime || time >= startTime) {
     return 0;
   }
@@ -1121,7 +1154,7 @@ function getWarningAlpha(startTime: number, warningTime: number, time: number): 
   const progress = clamp(warningAge / warningTime, 0, 1);
   const blink = 0.45 + Math.abs(Math.sin(warningAge * Math.PI * 7)) * 0.55;
 
-  return Math.max(0.1, progress) * blink * 0.72;
+  return Math.max(0.1, progress) * blink * clamp(maxAlpha, 0, 1);
 }
 
 function getFireClipBaseAngle(

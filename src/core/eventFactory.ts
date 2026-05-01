@@ -103,16 +103,16 @@ export function createAttackEvent(kind: AttackEventKind, startTime: number, stag
         duration: 4,
         color: 0xff2f4f,
         ...baseMotion,
-        polynomialA: -18,
-        polynomialB: 58,
-        polynomialC: -8,
-        polynomialD: 0.35,
-        pathSpeed: 260,
+        polynomialA: -0.18,
+        polynomialB: 0.11,
+        polynomialC: -0.01,
+        polynomialD: 0,
+        pathSpeed: 190,
         laserCount: 8,
         laserAngleStepDeg: 45,
-        laserWidth: 16,
-        laserLength: 420,
-        growSpeed: 260,
+        laserWidth: 10,
+        laserLength: 280,
+        growSpeed: 190,
       };
     case "transform_bullet":
       return {
@@ -224,12 +224,12 @@ export function createAttackEvent(kind: AttackEventKind, startTime: number, stag
         y: stage.height / 2,
         laserCount: 8,
         startAngle: 0,
-        width: 16,
-        length: 360,
-        extendSpeed: 260,
-        rotationSpeed: 28,
-        curveA: -85,
-        curveB: 56,
+        width: 10,
+        length: 280,
+        extendSpeed: 190,
+        rotationSpeed: 18,
+        curveA: -40,
+        curveB: 22,
       };
     case "warningZone":
       return {
@@ -270,6 +270,7 @@ export function createAttackEvent(kind: AttackEventKind, startTime: number, stag
         rotationStart: 0,
         rotationSpeed: 120,
         warningTime: 0.7,
+        warningAlpha: 0.72,
       };
     case "beatPulseRing":
       return {
@@ -288,6 +289,7 @@ export function createAttackEvent(kind: AttackEventKind, startTime: number, stag
         repeatCount: 4,
         repeatInterval: 0.5,
         warningTime: 0.4,
+        warningAlpha: 0.72,
       };
     case "closingWalls":
       return {
@@ -304,6 +306,7 @@ export function createAttackEvent(kind: AttackEventKind, startTime: number, stag
         holdTime: 1.2,
         returnTime: 0.9,
         warningTime: 0.8,
+        warningAlpha: 0.72,
       };
     case "safeLaneShift":
       return {
@@ -320,6 +323,7 @@ export function createAttackEvent(kind: AttackEventKind, startTime: number, stag
         switchInterval: 1,
         switchCount: 4,
         warningTime: 0.7,
+        warningAlpha: 0.72,
       };
     case "wallSweep":
       return {
@@ -336,6 +340,7 @@ export function createAttackEvent(kind: AttackEventKind, startTime: number, stag
         safeGapSize: 140,
         safeGapCenter: stage.height / 2,
         warningTime: 0.6,
+        warningAlpha: 0.72,
       };
     case "laserBeam":
       return {
@@ -368,6 +373,8 @@ export function createAttackEvent(kind: AttackEventKind, startTime: number, stag
         rotationSpeed: 120,
       };
   }
+
+  throw new Error(`Unsupported attack event kind: ${kind}`);
 }
 
 function createDefaultMotion(stage: StageSize): BulletMotionFields {

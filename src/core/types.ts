@@ -1,4 +1,4 @@
-export type AttackEventKind =
+export type NormalAttackEventKind =
   | "spawn_bullet"
   | "spawn_bullet_spread"
   | "spawn_aimed_spread"
@@ -21,6 +21,23 @@ export type AttackEventKind =
   | "laserBeam"
   | "rotatingShape";
 
+export type AttackPackageKind =
+  | "package_random_barrage"
+  | "package_repeating_lasers"
+  | "package_bomb_burst"
+  | "package_random_circle"
+  | "package_grid_square"
+  | "package_lag_radial"
+  | "package_random_lasers"
+  | "package_center_lasers"
+  | "package_area_parallel"
+  | "package_snake_chain"
+  | "package_enter_exit_bar"
+  | "package_rotating_lasers"
+  | "package_sequential_lasers";
+
+export type AttackEventKind = NormalAttackEventKind | AttackPackageKind;
+
 export type ZoneShape = "rectangle" | "circle" | "line" | "polygon";
 export type BlockShape = "rectangle" | "triangle" | "circle" | "polygon";
 export type PulseShape = "circle" | "square";
@@ -40,6 +57,44 @@ export interface BaseAttackEvent {
   startTime: number;
   duration: number;
   color: number;
+  visible?: boolean;
+  timelineLane?: number;
+  packageId?: string;
+  packageLocked?: boolean;
+}
+
+export interface AttackPackageEvent extends BaseAttackEvent {
+  kind: AttackPackageKind;
+  packageType: AttackPackageKind;
+  seed: number;
+  generatedEventIds: string[];
+  packageCount: number;
+  packageAngleWidth: number;
+  packageInterval: number;
+  packageThickness: number;
+  packageOrientation: LaneOrientation;
+  packageX: number;
+  packageY: number;
+  packageStartX: number;
+  packageStartY: number;
+  packageWidth: number;
+  packageHeight: number;
+  packageSize: number;
+  packageDuration: number;
+  packageFuseTime: number;
+  packageBulletCount: number;
+  packageSpeed: number;
+  packageDistance: number;
+  packageRotationSpeed: number;
+  packageWarningTime: number;
+  packageWarningAlpha: number;
+  packageSpacing: number;
+  packageInitialPosition: number;
+  packageLength: number;
+  packagePolynomialA: number;
+  packagePolynomialB: number;
+  packagePolynomialC: number;
+  packagePolynomialD: number;
 }
 
 export interface BulletMotionFields {
@@ -229,6 +284,7 @@ export interface MovingBlockEvent extends BaseAttackEvent {
   rotationStart: number;
   rotationSpeed: number;
   warningTime: number;
+  warningAlpha: number;
 }
 
 export interface BeatPulseRingEvent extends BaseAttackEvent {
@@ -242,6 +298,7 @@ export interface BeatPulseRingEvent extends BaseAttackEvent {
   repeatCount: number;
   repeatInterval: number;
   warningTime: number;
+  warningAlpha: number;
 }
 
 export interface ClosingWallsEvent extends BaseAttackEvent {
@@ -253,6 +310,7 @@ export interface ClosingWallsEvent extends BaseAttackEvent {
   holdTime: number;
   returnTime: number;
   warningTime: number;
+  warningAlpha: number;
 }
 
 export interface SafeLaneShiftEvent extends BaseAttackEvent {
@@ -264,6 +322,7 @@ export interface SafeLaneShiftEvent extends BaseAttackEvent {
   switchInterval: number;
   switchCount: number;
   warningTime: number;
+  warningAlpha: number;
 }
 
 export type WallEdge = "left" | "right" | "top" | "bottom";
@@ -277,6 +336,7 @@ export interface WallSweepEvent extends BaseAttackEvent {
   safeGapSize: number;
   safeGapCenter: number;
   warningTime: number;
+  warningAlpha: number;
 }
 
 export interface LaserBeamEvent extends BaseAttackEvent {
@@ -300,6 +360,7 @@ export interface RotatingShapeEvent extends BaseAttackEvent {
 }
 
 export type AttackEvent =
+  | AttackPackageEvent
   | SpawnBulletEvent
   | SpawnBulletSpreadEvent
   | SpawnAimedSpreadEvent
@@ -341,6 +402,7 @@ export interface BulletPattern {
   duration: number;
   stage: StageSize;
   timeline: TimelineSettings;
+  timelineLaneCount?: number;
   events: AttackEvent[];
 }
 
