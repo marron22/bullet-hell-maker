@@ -1107,7 +1107,7 @@ function handlePackagePanelClick(event: MouseEvent): void {
   const selectButton = target.closest<HTMLButtonElement>("[data-package-child-select]");
 
   if (selectButton?.dataset.packageChildSelect) {
-    selectPackageChild(selectButton.dataset.packageChildSelect, false);
+    selectPackageChild(selectButton.dataset.packageChildSelect, event.detail >= 2);
   }
 }
 
@@ -2062,10 +2062,13 @@ function renderEventList(): void {
     const mainButton = card.querySelector<HTMLButtonElement>(".event-card-main");
     const visibilityButton = card.querySelector<HTMLButtonElement>('[data-event-action="visibility"]');
 
-    mainButton?.addEventListener("click", () => {
+    mainButton?.addEventListener("click", (clickEvent) => {
       selectedEventId = event.id;
       if (editorMode === "trajectory") {
         editingEventId = getTrajectoryEditableEvent(event)?.id ?? null;
+      }
+      if (clickEvent.detail >= 2) {
+        activeInspectorTab = isAttackPackageEvent(event) ? "package" : "properties";
       }
       renderEverything();
     });
@@ -2074,7 +2077,7 @@ function renderEventList(): void {
       if (editorMode === "trajectory") {
         editingEventId = getTrajectoryEditableEvent(event)?.id ?? null;
       }
-      activeInspectorTab = "properties";
+      activeInspectorTab = isAttackPackageEvent(event) ? "package" : "properties";
       renderEverything();
     });
     visibilityButton?.addEventListener("click", () => {

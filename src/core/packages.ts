@@ -85,6 +85,7 @@ export const packageFieldConfigs: PackageFieldConfig[] = [
     "package_area_parallel",
     "package_snake_chain",
     "package_rotating_lasers",
+    "package_sequential_lasers",
   ], 1, 128, 1, true),
   field("packageBulletCount", "bulletCount", [
     "package_bomb_burst",
@@ -134,14 +135,18 @@ export const packageFieldConfigs: PackageFieldConfig[] = [
   field("packageX", "x", [
     "package_random_barrage",
     "package_bomb_burst",
+    "package_lag_radial",
     "package_area_parallel",
     "package_enter_exit_bar",
+    "package_snake_chain",
   ], -1000, 2000, 1),
   field("packageY", "y", [
     "package_random_barrage",
     "package_bomb_burst",
+    "package_lag_radial",
     "package_area_parallel",
     "package_enter_exit_bar",
+    "package_snake_chain",
   ], -1000, 2000, 1),
   field("packageStartX", "startX", [
     "package_bomb_burst",
@@ -165,6 +170,7 @@ export const packageFieldConfigs: PackageFieldConfig[] = [
   field("packageSpeed", "speed", [
     "package_random_barrage",
     "package_bomb_burst",
+    "package_lag_radial",
     "package_area_parallel",
     "package_snake_chain",
     "package_enter_exit_bar",
@@ -179,10 +185,13 @@ export const packageFieldConfigs: PackageFieldConfig[] = [
     "package_sequential_lasers",
   ], -1200, 2000, 1),
   field("packageLength", "length", [
+    "package_repeating_lasers",
+    "package_random_lasers",
+    "package_center_lasers",
     "package_enter_exit_bar",
     "package_rotating_lasers",
     "package_sequential_lasers",
-  ], 20, 2000, 1),
+  ], 20, 4000, 1),
   field("packageRotationSpeed", "rotationSpeed", [
     "package_rotating_lasers",
   ], -720, 720, 5),
@@ -321,6 +330,7 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
       pkg.packageCount = 5;
       pkg.packageInterval = 0.48;
       pkg.packageThickness = 22;
+      pkg.packageLength = getStraightLaserLength(stage, pkg.packageOrientation);
       pkg.packageDuration = 0.72;
       pkg.packageOrientation = "horizontal";
       break;
@@ -362,6 +372,7 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
     case "package_random_lasers":
       pkg.packageCount = 5;
       pkg.packageThickness = 18;
+      pkg.packageLength = Math.hypot(stage.width, stage.height) * 2.25;
       pkg.packageDuration = 1;
       pkg.packageWarningTime = 0.55;
       pkg.packageWarningAlpha = 0.2;
@@ -369,6 +380,7 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
     case "package_center_lasers":
       pkg.packageCount = 10;
       pkg.packageThickness = 16;
+      pkg.packageLength = Math.hypot(stage.width, stage.height) * 2.25;
       pkg.packageDuration = 1.2;
       pkg.packageWarningTime = 0.5;
       pkg.packageWarningAlpha = 0.2;
@@ -476,7 +488,7 @@ function buildRandomBarrage(pkg: AttackPackageEvent, stage: StageSize): AttackEv
 function buildRepeatingLasers(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[] {
   const events: AttackEvent[] = [];
   const count = Math.max(1, Math.round(pkg.packageCount));
-  const length = getStraightLaserLength(stage, pkg.packageOrientation);
+  const length = Math.max(20, pkg.packageLength);
 
   for (let index = 0; index < count; index += 1) {
     const position = pkg.packageOrientation === "horizontal"
@@ -643,14 +655,15 @@ function buildLagRadial(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[
 function buildRandomLasers(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[] {
   const events: AttackEvent[] = [];
   const count = Math.max(1, Math.round(pkg.packageCount));
+  const length = Math.max(20, pkg.packageLength);
 
   for (let index = 0; index < count; index += 1) {
     const angle = randomRange(pkg.seed + index * 29, -180, 180);
     const x = randomRange(pkg.seed + index * 31, stage.width * 0.15, stage.width * 0.85);
     const y = randomRange(pkg.seed + index * 43, stage.height * 0.15, stage.height * 0.85);
 
-    events.push(makeAngledLaserWarning(pkg, stage, index, pkg.startTime - pkg.packageWarningTime, x, y, angle));
-    events.push(makeAngledLaserBullet(pkg, stage, index, pkg.startTime, x, y, angle, 0));
+    events.push(makeAngledLaserWarning(pkg, stage, index, pkg.startTime - pkg.packageWarningTime, x, y, angle, length));
+    events.push(makeAngledLaserBullet(pkg, stage, index, pkg.startTime, x, y, angle, 0, length));
   }
 
   return events;
@@ -659,12 +672,13 @@ function buildRandomLasers(pkg: AttackPackageEvent, stage: StageSize): AttackEve
 function buildCenterLasers(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[] {
   const events: AttackEvent[] = [];
   const count = Math.max(1, Math.round(pkg.packageCount));
+  const length = Math.max(20, pkg.packageLength);
 
   for (let index = 0; index < count; index += 1) {
     const angle = (360 / count) * index;
 
-    events.push(makeAngledLaserWarning(pkg, stage, index, pkg.startTime - pkg.packageWarningTime, stage.width / 2, stage.height / 2, angle));
-    events.push(makeAngledLaserBullet(pkg, stage, index, pkg.startTime, stage.width / 2, stage.height / 2, angle, 0));
+    events.push(makeAngledLaserWarning(pkg, stage, index, pkg.startTime - pkg.packageWarningTime, stage.width / 2, stage.height / 2, angle, length));
+    events.push(makeAngledLaserBullet(pkg, stage, index, pkg.startTime, stage.width / 2, stage.height / 2, angle, 0, length));
   }
 
   return events;
@@ -868,7 +882,17 @@ function makeAngledLaserWarning(
   return event;
 }
 
-function makeAngledLaserBullet(pkg: AttackPackageEvent, stage: StageSize, index: number, startTime: number, x: number, y: number, angle: number, visualAngle: number): SpawnBulletSpreadEvent {
+function makeAngledLaserBullet(
+  pkg: AttackPackageEvent,
+  stage: StageSize,
+  index: number,
+  startTime: number,
+  x: number,
+  y: number,
+  angle: number,
+  visualAngle: number,
+  length = Math.hypot(stage.width, stage.height) * 2.25,
+): SpawnBulletSpreadEvent {
   const event = makeSpread(pkg, stage, index, startTime, `${pkg.name} ${index + 1}`);
 
   event.originX = x;
@@ -876,7 +900,7 @@ function makeAngledLaserBullet(pkg: AttackPackageEvent, stage: StageSize, index:
   event.baseAngleDeg = angle;
   event.pathSpeed = 0;
   event.duration = pkg.packageDuration;
-  setLaserVisual(event, Math.hypot(stage.width, stage.height) * 2.25, pkg.packageThickness, visualAngle);
+  setLaserVisual(event, length, pkg.packageThickness, visualAngle);
   return event;
 }
 
@@ -901,7 +925,7 @@ function getStraightLaserLength(stage: StageSize, orientation: "horizontal" | "v
 }
 
 function getPackageDuration(pkg: AttackPackageEvent): number {
-  const repeatLikeDuration = pkg.packageDuration + Math.max(0, Math.max(pkg.packageCount, pkg.packageBulletCount) - 1) * Math.max(0, pkg.packageInterval);
+  const countLikeDuration = pkg.packageDuration + Math.max(0, Math.round(pkg.packageCount) - 1) * Math.max(0, pkg.packageInterval);
 
   switch (pkg.kind) {
     case "package_bomb_burst":
@@ -913,7 +937,7 @@ function getPackageDuration(pkg: AttackPackageEvent): number {
     case "package_lag_radial":
     case "package_area_parallel":
     case "package_sequential_lasers":
-      return repeatLikeDuration;
+      return countLikeDuration;
     default:
       return pkg.packageDuration;
   }
