@@ -28,6 +28,7 @@ export type AttackPackageKind =
   | "package_random_circle"
   | "package_grid_square"
   | "package_lag_radial"
+  | "package_split_lag_radial"
   | "package_random_lasers"
   | "package_center_lasers"
   | "package_area_parallel"
@@ -70,20 +71,28 @@ export interface AttackPackageEvent extends BaseAttackEvent {
   generatedEventIds: string[];
   packageCount: number;
   packageAngleWidth: number;
+  packageStartAngle: number;
   packageInterval: number;
   packageThickness: number;
   packageOrientation: LaneOrientation;
   packageX: number;
   packageY: number;
+  packageAimAtPlayer: number;
+  packageSplitAimAtPlayer: number;
   packageStartX: number;
   packageStartY: number;
   packageWidth: number;
   packageHeight: number;
   packageSize: number;
+  packageBombSize: number;
   packageDuration: number;
+  packageSplitDuration: number;
   packageFuseTime: number;
   packageBulletCount: number;
   packageSpeed: number;
+  packageSplitSpeed: number;
+  packageSplitStartAngle: number;
+  packageDirectionDeg: number;
   packageDistance: number;
   packageRotationSpeed: number;
   packageWarningTime: number;
@@ -145,6 +154,7 @@ export interface SpawnAimedSpreadEvent extends BaseAttackEvent, BulletMotionFiel
 
 export interface SpawnRadialEvent extends BaseAttackEvent, BulletMotionFields {
   kind: "spawn_radial";
+  aimAtPlayer: number;
   radialCount: number;
   radialRepeat: number;
   radialInterval: number;

@@ -61,7 +61,7 @@ export function buildAttackFrame(events: AttackEvent[], time: number, stage: Sta
         frame.bullets.push(...buildSpawnAimedSpread(event, time, playerPosition));
         break;
       case "spawn_radial":
-        frame.bullets.push(...buildSpawnRadial(event, time));
+        frame.bullets.push(...buildSpawnRadial(event, time, playerPosition));
         break;
       case "spawn_enemy_origin":
         pushIfDefined(frame.shapes, buildSpawnEnemyOrigin(event, time));
@@ -203,25 +203,28 @@ function buildFireClipBullets(
   return bullets;
 }
 
-function buildSpawnRadial(event: SpawnRadialEvent, time: number): BulletRender[] {
+function buildSpawnRadial(event: SpawnRadialEvent, time: number, playerPosition?: { x: number; y: number }): BulletRender[] {
   const bullets: BulletRender[] = [];
   const repeat = Math.max(1, Math.round(event.radialRepeat));
   const interval = Math.max(0, event.radialInterval);
   const count = Math.max(1, Math.round(event.radialCount));
 
   for (let repeatIndex = 0; repeatIndex < repeat; repeatIndex += 1) {
-    const age = time - (event.startTime + interval * repeatIndex);
+    const occurrenceTime = event.startTime + interval * repeatIndex;
+    const age = time - occurrenceTime;
 
     if (!isActiveAge(age, event.duration)) {
       continue;
     }
+
+    const baseAngle = getRadialBaseAngle(event, occurrenceTime, playerPosition);
 
     for (let index = 0; index < count; index += 1) {
       bullets.push(
         buildMotionBullet(
           event,
           age,
-          event.polarTheta + event.radialStartAngle + (360 / count) * index,
+          event.polarTheta + baseAngle + (360 / count) * index,
           event.id,
           event.color,
           `${event.id}:radial:${repeatIndex}:${index}`,
@@ -1175,6 +1178,26 @@ function getFireClipBaseAngle(
       { x: event.originX, y: event.originY + 1 },
       playerPosition,
     ) + fallbackBaseAngle
+  );
+}
+
+function getRadialBaseAngle(
+  event: SpawnRadialEvent,
+  occurrenceTime: number,
+  playerPosition?: { x: number; y: number },
+): number {
+  if ((event.aimAtPlayer ?? 0) <= 0) {
+    return event.radialStartAngle;
+  }
+
+  return (
+    getLockedAimAngle(
+      `radial-aim:${event.id}:${occurrenceTime.toFixed(3)}:${event.originX}:${event.originY}`,
+      event.originX,
+      event.originY,
+      { x: event.originX, y: event.originY + 1 },
+      playerPosition,
+    ) + event.radialStartAngle
   );
 }
 

@@ -54,7 +54,7 @@ button:disabled {
 
 .app-shell {
   display: grid;
-  grid-template-rows: 48px minmax(0, 1fr) var(--timeline-height, 128px);
+  grid-template-rows: 48px minmax(0, 1fr) var(--timeline-height, 220px);
   height: 100vh;
   min-height: 0;
   min-width: 0;
@@ -369,7 +369,7 @@ button:disabled {
 }
 
 .app-shell.is-preview-mode {
-  grid-template-rows: 48px minmax(0, 1fr) var(--timeline-height, 128px);
+  grid-template-rows: 48px minmax(0, 1fr) var(--timeline-height, 220px);
 }
 
 .app-shell.is-preview-mode .workspace {
@@ -616,6 +616,20 @@ body.is-resizing-layout {
 
 .event-card.is-hidden {
   opacity: 0.5;
+}
+
+.copy-status {
+  background: #090909;
+  border: 1px solid #343434;
+  border-radius: 4px;
+  color: #dcdcdc;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.45;
+  overflow: hidden;
+  padding: 7px 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .event-card-main {
@@ -1033,7 +1047,7 @@ body.is-resizing-layout {
   min-height: 0;
   padding: 0;
   position: absolute;
-  z-index: 3;
+  z-index: 6;
   top: calc((100% / var(--timeline-lane-count, 1)) * var(--timeline-lane-index, 0));
   transform: translateX(-50%);
   width: 24px;
@@ -1108,6 +1122,7 @@ body.is-resizing-layout {
 .timeline-playhead {
   background: #f7f7f7;
   bottom: 4px;
+  pointer-events: none;
   position: absolute;
   top: 4px;
   transform: translateX(-50%);

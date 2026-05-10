@@ -59,6 +59,7 @@ export function createAttackEvent(kind: AttackEventKind, startTime: number, stag
         duration: 4,
         color: 0xff2f93,
         ...baseMotion,
+        aimAtPlayer: 0,
         radialCount: 16,
         radialRepeat: 2,
         radialInterval: 0.8,

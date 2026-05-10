@@ -55,6 +55,7 @@ export function createStarterPattern(): BulletPattern {
     packageY: starterStage.height / 2,
     packageCount: 6,
     packageBulletCount: 14,
+    packageStartAngle: 0,
     packageAngleWidth: 16,
     packageInterval: 0.18,
     packageSpeed: 260,
@@ -68,6 +69,7 @@ export function createStarterPattern(): BulletPattern {
   });
   addPackage(events, "package_center_lasers", 12.1, "中心全方向レーザー", 1, {
     packageCount: 8,
+    packageStartAngle: 0,
     packageThickness: 14,
     packageDuration: 0.9,
     packageWarningTime: 0.5,
@@ -107,6 +109,7 @@ export function createStarterPattern(): BulletPattern {
   });
   addPackage(events, "package_rotating_lasers", 19.2, "中央回転レーザー", 2, {
     packageCount: 8,
+    packageStartAngle: 0,
     packageLength: Math.hypot(starterStage.width, starterStage.height) * 1.25,
     packageThickness: 13,
     packageRotationSpeed: 76,
@@ -124,11 +127,23 @@ export function createStarterPattern(): BulletPattern {
     packageWarningTime: 0.4,
     packageOrientation: "horizontal",
   });
+  addPackage(events, "package_split_lag_radial", 24.4, "分裂ラグ円形弾", 0, {
+    packageX: starterStage.width / 2,
+    packageY: starterStage.height / 2,
+    packageCount: 8,
+    packageBulletCount: 7,
+    packageStartAngle: 0,
+    packageSplitStartAngle: 28,
+    packageSpeed: 245,
+    packageSplitSpeed: 235,
+    packageDuration: 1.05,
+    packageSplitDuration: 1.1,
+  });
 
   return {
     version: 1,
     title: "Starter Pattern",
-    duration: 28,
+    duration: 29,
     stage: starterStage,
     timelineLaneCount: 4,
     timeline: {

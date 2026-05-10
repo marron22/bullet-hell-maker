@@ -17,9 +17,21 @@ import { PlaybackClock } from "./core/playback";
 import type { AttackEvent, AttackEventKind, AttackFrame, AttackPackageEvent, BulletPattern, CurvedLaserRender, HazardRender, LaserRender, ShapeRender, TimelineSettings, WallRender } from "./core/types";
 import { PreviewStage } from "./preview/PreviewStage";
 
+interface ProjectMusicAsset {
+  name: string;
+  type: string;
+  dataUrl: string;
+  volume: number;
+}
+
+type ProjectPatternFile = Partial<BulletPattern> & {
+  music?: ProjectMusicAsset | null;
+};
+
 let pattern = createStarterPattern();
 const clock = new PlaybackClock();
 let selectedEventId: string | null = pattern.events[0]?.id ?? null;
+let selectedEventIds = new Set<string>(selectedEventId ? [selectedEventId] : []);
 let timelineDragging = false;
 let markerDraggingId: string | null = null;
 let markerDragMoved = false;
@@ -29,7 +41,10 @@ let musicObjectUrl: string | null = null;
 let musicPeaks: number[] = [];
 let musicChannelData: Float32Array | null = null;
 let musicPeakResolution = 0;
-let copiedEvent: AttackEvent | null = null;
+let copiedEvents: AttackEvent[] = [];
+let copiedEventsAnchorTime = 0;
+let copyStatusText = "";
+let projectMusicAsset: ProjectMusicAsset | null = null;
 let timelineZoom = 1;
 let markerDragHistoryRecorded = false;
 let snapToMeasures = false;
@@ -44,7 +59,7 @@ let dashCooldownRemaining = 0;
 let playerWasHit = false;
 const pressedPreviewKeys = new Set<string>();
 const lastPreviewDirection = { x: 0, y: -1 };
-let timelinePanelHeight = 128;
+let timelinePanelHeight = 220;
 let inspectorPanelWidth = 380;
 let activeResizeTarget: "timeline" | "inspector" | null = null;
 let suppressNextPlayClick = false;
@@ -777,7 +792,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-add-kind]").forEach((button)
 
       pushHistory();
       pattern.events.push(packageEvent, ...generatedEvents);
-      selectedEventId = packageEvent.id;
+      selectSingleEvent(packageEvent.id);
       activeInspectorTab = "package";
       closeMenus();
       renderEverything();
@@ -791,7 +806,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-add-kind]").forEach((button)
     pushHistory();
     pattern.events.push(event);
     sortEvents();
-    selectedEventId = event.id;
+    selectSingleEvent(event.id);
     closeMenus();
     renderEverything();
   });
@@ -1055,6 +1070,7 @@ function handlePackagePanelInput(event: Event): void {
     pushHistory();
     packageEvent.name = input.value;
     refreshPackageGeneratedEvents(packageEvent);
+    selectSingleEvent(packageEvent.id);
     renderEverything();
     return;
   }
@@ -1066,7 +1082,9 @@ function handlePackagePanelInput(event: Event): void {
   }
 
   pushHistory();
-  if (config.type === "select") {
+  if (config.type === "checkbox" && input instanceof HTMLInputElement) {
+    (packageEvent as unknown as Record<string, number>)[config.name] = input.checked ? 1 : 0;
+  } else if (config.type === "select") {
     (packageEvent as unknown as Record<string, string>)[config.name] = input.value;
   } else {
     const parsedValue = Number(input.value);
@@ -1079,7 +1097,7 @@ function handlePackagePanelInput(event: Event): void {
   }
 
   refreshPackageGeneratedEvents(packageEvent);
-  selectedEventId = packageEvent.id;
+  selectSingleEvent(packageEvent.id);
   clearAimCache();
   renderEverything();
 }
@@ -1132,7 +1150,7 @@ function selectPackageChild(eventId: string, openProperties: boolean): void {
     return;
   }
 
-  selectedEventId = child.id;
+  selectSingleEvent(child.id);
 
   if (editorMode === "trajectory") {
     editingEventId = child.id;
@@ -1318,7 +1336,17 @@ function updateMarkerTimeFromPointer(eventId: string, event: PointerEvent): void
 }
 
 function exportProjectPattern(): void {
-  downloadJson(pattern, `${pattern.title.replace(/[^\w-]+/g, "_") || "danmaku_project"}.project.json`);
+  const projectPattern: ProjectPatternFile = {
+    ...pattern,
+    music: projectMusicAsset
+      ? {
+          ...projectMusicAsset,
+          volume: audio.volume,
+        }
+      : null,
+  };
+
+  downloadJson(projectPattern, `${pattern.title.replace(/[^\w-]+/g, "_") || "danmaku_project"}.project.json`);
 }
 
 function exportUnityPattern(): void {
@@ -1358,7 +1386,7 @@ function downloadJson(value: unknown, fileName: string): void {
 async function importPattern(file: File): Promise<void> {
   try {
     const text = await file.text();
-    const parsed = JSON.parse(text) as Partial<BulletPattern>;
+    const parsed = JSON.parse(text) as ProjectPatternFile;
 
     if (parsed.version !== 1 || !Array.isArray(parsed.events) || !parsed.stage) {
       throw new Error("Invalid pattern file.");
@@ -1377,10 +1405,14 @@ async function importPattern(file: File): Promise<void> {
       timelineLaneCount: Number(parsed.timelineLaneCount) || minimumTimelineLaneCount,
       events: parsed.events.map((event) => normalizeImportedEvent(event, parsed.stage!)),
     };
-    if (hasMusic()) {
-      pattern.duration = Math.max(pattern.duration, audio.duration);
+    if (parsed.music?.dataUrl) {
+      await loadMusicFromProjectAsset(parsed.music);
+      pattern.duration = Math.max(pattern.duration, audio.duration || 0);
+    } else {
+      clearMusic();
     }
-    selectedEventId = pattern.events[0]?.id ?? null;
+
+    selectSingleEvent(pattern.events[0]?.id ?? null);
     editingEventId = null;
     resetPlayback();
     renderEverything();
@@ -1396,6 +1428,7 @@ async function loadMusic(file: File): Promise<void> {
   }
 
   stopPlayback();
+  projectMusicAsset = await buildProjectMusicAsset(file);
   musicObjectUrl = URL.createObjectURL(file);
   audio.src = musicObjectUrl;
   audio.load();
@@ -1413,6 +1446,51 @@ async function loadMusic(file: File): Promise<void> {
     musicPeaks = [];
     renderWaveform();
   }
+}
+
+async function loadMusicFromProjectAsset(asset: ProjectMusicAsset): Promise<void> {
+  const response = await fetch(asset.dataUrl);
+  const blob = await response.blob();
+  const file = new File([blob], asset.name || "project-music", { type: asset.type || blob.type || "audio/*" });
+
+  await loadMusic(file);
+  audio.volume = clamp(Number(asset.volume), 0, 1);
+  musicVolumeInput.value = String(Math.round(audio.volume * 100));
+}
+
+function clearMusic(): void {
+  stopPlayback();
+  projectMusicAsset = null;
+  musicChannelData = null;
+  musicPeakResolution = 0;
+  musicPeaks = [];
+  musicDisplay.textContent = "No music";
+
+  if (musicObjectUrl) {
+    URL.revokeObjectURL(musicObjectUrl);
+    musicObjectUrl = null;
+  }
+
+  audio.removeAttribute("src");
+  audio.load();
+  renderWaveform();
+}
+
+function buildProjectMusicAsset(file: File): Promise<ProjectMusicAsset> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.addEventListener("load", () => {
+      resolve({
+        name: file.name,
+        type: file.type,
+        dataUrl: String(reader.result ?? ""),
+        volume: audio.volume,
+      });
+    });
+    reader.addEventListener("error", () => reject(reader.error ?? new Error("Music file could not be read.")));
+    reader.readAsDataURL(file);
+  });
 }
 
 function normalizeImportedEvent(rawEvent: unknown, stage: BulletPattern["stage"]): AttackEvent {
@@ -1909,7 +1987,7 @@ function handleLayoutResizeMove(event: PointerEvent): void {
   }
 
   if (activeResizeTarget === "timeline") {
-    timelinePanelHeight = clamp(window.innerHeight - event.clientY, 96, Math.min(420, window.innerHeight * 0.52));
+    timelinePanelHeight = clamp(window.innerHeight - event.clientY, 160, Math.min(460, window.innerHeight * 0.56));
   } else {
     inspectorPanelWidth = clamp(window.innerWidth - event.clientX, 300, Math.min(680, window.innerWidth * 0.5));
   }
@@ -2006,7 +2084,12 @@ function restorePattern(snapshot: BulletPattern): void {
   }
 
   if (!pattern.events.some((event) => event.id === selectedEventId)) {
-    selectedEventId = pattern.events[0]?.id ?? null;
+    selectSingleEvent(pattern.events[0]?.id ?? null);
+  } else {
+    selectedEventIds = new Set([...selectedEventIds].filter((eventId) => pattern.events.some((event) => event.id === eventId)));
+    if (selectedEventId) {
+      selectedEventIds.add(selectedEventId);
+    }
   }
 
   if (!pattern.events.some((event) => event.id === editingEventId)) {
@@ -2034,8 +2117,62 @@ function closeMenus(): void {
   menuPopovers.forEach((popover) => popover.classList.remove("is-open"));
 }
 
+function selectSingleEvent(eventId: string | null): void {
+  selectedEventId = eventId;
+  selectedEventIds = eventId ? new Set([eventId]) : new Set();
+}
+
+function toggleSelectedEvent(eventId: string): void {
+  const nextSelection = new Set(selectedEventIds);
+
+  if (nextSelection.has(eventId)) {
+    nextSelection.delete(eventId);
+  } else {
+    nextSelection.add(eventId);
+  }
+
+  if (nextSelection.size === 0) {
+    nextSelection.add(eventId);
+  }
+
+  selectedEventIds = nextSelection;
+  selectedEventId = nextSelection.has(eventId) ? eventId : [...nextSelection][nextSelection.size - 1] ?? eventId;
+}
+
+function selectEventFromPointer(eventId: string, pointerEvent: MouseEvent | PointerEvent): void {
+  if (pointerEvent.ctrlKey || pointerEvent.metaKey) {
+    toggleSelectedEvent(eventId);
+  } else {
+    selectSingleEvent(eventId);
+  }
+}
+
+function isSelectedEvent(event: AttackEvent): boolean {
+  return selectedEventIds.has(event.id);
+}
+
+function getSelectedEvents(): AttackEvent[] {
+  const selectedEvents = pattern.events.filter((event) => selectedEventIds.has(event.id));
+
+  if (selectedEvents.length > 0) {
+    return selectedEvents;
+  }
+
+  const selectedEvent = getSelectedEvent();
+
+  return selectedEvent ? [selectedEvent] : [];
+}
+
 function renderEventList(): void {
   eventList.innerHTML = "";
+
+  if (copyStatusText) {
+    const status = document.createElement("div");
+
+    status.className = "copy-status";
+    status.textContent = copyStatusText;
+    eventList.appendChild(status);
+  }
 
   for (const event of pattern.events.filter((patternEvent) => !patternEvent.packageId)) {
     const card = document.createElement("div");
@@ -2043,7 +2180,7 @@ function renderEventList(): void {
     const isMutedByEditMode = editorMode === "trajectory" && editingEventId !== null && event.id !== editingEventId;
     const isVisible = isEventVisible(event);
 
-    card.className = `event-card ${event.id === selectedEventId ? "is-selected" : ""} ${isMutedByEditMode ? "is-muted" : ""} ${!isVisible ? "is-hidden" : ""}`;
+    card.className = `event-card ${isSelectedEvent(event) ? "is-selected" : ""} ${isMutedByEditMode ? "is-muted" : ""} ${!isVisible ? "is-hidden" : ""}`;
     card.innerHTML = `
       <button class="event-card-main" type="button">
         <div class="event-card-title">
@@ -2063,7 +2200,7 @@ function renderEventList(): void {
     const visibilityButton = card.querySelector<HTMLButtonElement>('[data-event-action="visibility"]');
 
     mainButton?.addEventListener("click", (clickEvent) => {
-      selectedEventId = event.id;
+      selectEventFromPointer(event.id, clickEvent);
       if (editorMode === "trajectory") {
         editingEventId = getTrajectoryEditableEvent(event)?.id ?? null;
       }
@@ -2073,7 +2210,7 @@ function renderEventList(): void {
       renderEverything();
     });
     mainButton?.addEventListener("dblclick", () => {
-      selectedEventId = event.id;
+      selectSingleEvent(event.id);
       if (editorMode === "trajectory") {
         editingEventId = getTrajectoryEditableEvent(event)?.id ?? null;
       }
@@ -2238,6 +2375,15 @@ function renderPackageField(event: AttackPackageEvent, field: PackageFieldConfig
   const value = (event as unknown as Record<string, string | number>)[field.name];
   const title = getPropertyTooltip(field.name);
 
+  if (field.type === "checkbox") {
+    return `
+      <label class="property-field property-checkbox-field">
+        <span title="${title}">${field.label}</span>
+        <input name="${field.name}" type="checkbox" ${Number(value ?? 0) > 0 ? "checked" : ""} />
+      </label>
+    `;
+  }
+
   if (field.type === "select") {
     return `
       <label class="property-field">
@@ -2259,7 +2405,7 @@ function renderPackageField(event: AttackPackageEvent, field: PackageFieldConfig
 
 function renderPackageChildCard(event: AttackEvent): string {
   const isVisible = isEventVisible(event);
-  const isSelected = event.id === selectedEventId;
+  const isSelected = isSelectedEvent(event);
 
   return `
     <div class="event-card package-child-card ${isSelected ? "is-selected" : ""} ${!isVisible ? "is-hidden" : ""}" data-package-child-id="${event.id}">
@@ -2283,10 +2429,14 @@ function renderPackageChildCard(event: AttackEvent): string {
 function getPropertyDescription(name: string): string {
   if (name.startsWith("package")) {
     const packageDescriptions: Record<string, string> = {
-      packageCount: "パッケージ内で生成する攻撃や弾の数です。",
+      packageCount: "パッケージ内で生成する攻撃や弾の数です。分裂ラグ円形弾では最初に放つ弾数です。",
       packageStartX: "ボムなどが最初に出現するX座標です。",
       packageStartY: "ボムなどが最初に出現するY座標です。",
-      packageAngleWidth: "ランダム発射やボム破裂で使う角度の広がりです。",
+      packageAngleWidth: "ランダム発射やボム破裂では角度の広がりです。ラグ円形連射では各連射ごとに開始角度をずらす量です。",
+      packageStartAngle: "最初の発射角度です。0で右向き、90で下向きです。",
+      packageSplitStartAngle: "分裂後の発射角度です。分裂ラグ円形弾では親弾の進行方向にこの角度を加えます。",
+      packageAimAtPlayer: "オンにすると、最初の発射角度を発射時点のプレイヤー位置へ向けます。",
+      packageSplitAimAtPlayer: "オンにすると、分裂後の発射角度を発射時点のプレイヤー位置へ向けます。",
       packageInterval: "繰り返し生成する間隔です。",
       packageThickness: "レーザーやバーの太さです。",
       packageOrientation: "水平または垂直の向きです。",
@@ -2295,10 +2445,14 @@ function getPropertyDescription(name: string): string {
       packageWidth: "ランダム生成エリアの幅です。",
       packageHeight: "ランダム生成エリアの高さです。",
       packageSize: "円、四角、正方形弾などの基本サイズです。",
-      packageDuration: "生成される攻撃ひとつ分の継続時間です。",
+      packageDuration: "生成される攻撃ひとつ分の継続時間です。分裂ラグ円形弾では分裂前の弾が消えて次の発射が起きるまでの時間です。",
+      packageSplitDuration: "分裂後に発射された弾が消えるまでの時間です。",
       packageFuseTime: "ボムが出現してから破裂するまでの時間です。",
-      packageBulletCount: "一度に放つ弾の数です。",
+      packageBulletCount: "一度に放つ弾の数です。分裂ラグ円形弾では各消滅位置から再発射する弾数です。",
+      packageBombSize: "ボム本体として飛んでくる円の大きさです。",
       packageSpeed: "生成される弾やバーの移動速度です。",
+      packageSplitSpeed: "分裂後に発射された弾の移動速度です。",
+      packageDirectionDeg: "エリア平行弾の発射方向です。0で右向き、90で下向きです。",
       packageDistance: "連続レーザー同士の距離です。",
       packageRotationSpeed: "回転レーザーの回転速度です。",
       packageWarningTime: "本体攻撃の前に表示する予告時間です。",
@@ -2500,7 +2654,7 @@ function renderTimelineMarkers(): void {
     const rangeWidthRatio = Math.max(endRatio - startRatio, minimumRangeRatio);
     const range = document.createElement("div");
 
-    range.className = `timeline-event-range ${event.id === selectedEventId ? "is-selected" : ""} ${isMutedByEditMode ? "is-muted" : ""} ${!isVisible ? "is-hidden" : ""}`;
+    range.className = `timeline-event-range ${isSelectedEvent(event) ? "is-selected" : ""} ${isMutedByEditMode ? "is-muted" : ""} ${!isVisible ? "is-hidden" : ""}`;
     range.title = `${event.name} ${event.startTime.toFixed(2)}s - ${endTime.toFixed(2)}s`;
     range.style.left = `${startRatio * 100}%`;
     range.style.width = `${Math.min(rangeWidthRatio, 1 - startRatio) * 100}%`;
@@ -2509,17 +2663,23 @@ function renderTimelineMarkers(): void {
     timelineTrack.appendChild(range);
 
     marker.type = "button";
-    marker.className = `timeline-marker ${event.id === selectedEventId ? "is-selected" : ""} ${isMutedByEditMode ? "is-muted" : ""} ${!isVisible ? "is-hidden" : ""}`;
+    marker.className = `timeline-marker ${isSelectedEvent(event) ? "is-selected" : ""} ${isMutedByEditMode ? "is-muted" : ""} ${!isVisible ? "is-hidden" : ""}`;
     marker.title = `${event.name} (${event.startTime.toFixed(2)}s - ${endTime.toFixed(2)}s)`;
     marker.style.left = `${startRatio * 100}%`;
     marker.style.setProperty("--marker-color", formatColor(event.color));
     marker.style.setProperty("--timeline-lane-index", String(laneIndex));
     marker.addEventListener("pointerdown", (pointerEvent) => {
       pointerEvent.stopPropagation();
-      selectedEventId = event.id;
+      selectEventFromPointer(event.id, pointerEvent);
       if (editorMode === "trajectory") {
         editingEventId = getTrajectoryEditableEvent(event)?.id ?? null;
       }
+
+      if (pointerEvent.ctrlKey || pointerEvent.metaKey) {
+        renderEverything();
+        return;
+      }
+
       markerDraggingId = event.id;
       markerDragMoved = false;
       markerDragHistoryRecorded = false;
@@ -2589,13 +2749,17 @@ function renderTimelineMarkers(): void {
 
       renderEverything();
     });
-    marker.addEventListener("click", () => {
+    marker.addEventListener("click", (clickEvent) => {
+      if (clickEvent.ctrlKey || clickEvent.metaKey) {
+        return;
+      }
+
       if (markerDragMoved) {
         markerDragMoved = false;
         return;
       }
 
-      selectedEventId = event.id;
+      selectSingleEvent(event.id);
       if (editorMode === "trajectory") {
         editingEventId = getTrajectoryEditableEvent(event)?.id ?? null;
       }
@@ -3220,59 +3384,128 @@ function getGridLinePositions(): Array<{ time: number; ratio: number; isMeasure:
 }
 
 function deleteSelectedEvent(): void {
-  const selectedEvent = getSelectedEvent();
+  const selectedEvents = getSelectedEvents();
 
-  if (!selectedEvent) {
+  if (selectedEvents.length === 0) {
     return;
   }
 
-  const deletedIndex = pattern.events.findIndex((event) => event.id === selectedEvent.id);
+  const deletedIds = new Set<string>();
+  const deletedIndex = Math.min(...selectedEvents.map((selectedEvent) => pattern.events.findIndex((event) => event.id === selectedEvent.id)).filter((index) => index >= 0));
 
   pushHistory();
-  pattern.events = pattern.events.filter((event) => event.id !== selectedEvent.id && event.packageId !== selectedEvent.id);
+  for (const selectedEvent of selectedEvents) {
+    deletedIds.add(selectedEvent.id);
 
-  if (editingEventId === selectedEvent.id) {
+    if (isAttackPackageEvent(selectedEvent)) {
+      for (const child of getPackageChildren(selectedEvent)) {
+        deletedIds.add(child.id);
+      }
+    }
+  }
+
+  pattern.events = pattern.events.filter((event) => !deletedIds.has(event.id));
+
+  if (editingEventId && deletedIds.has(editingEventId)) {
     editingEventId = null;
   }
 
-  selectedEventId = pattern.events[Math.min(deletedIndex, pattern.events.length - 1)]?.id ?? null;
+  selectSingleEvent(pattern.events[Math.min(deletedIndex, pattern.events.length - 1)]?.id ?? null);
   renderEverything();
 }
 
 function copySelectedEvent(): void {
-  const selectedEvent = getSelectedEvent();
+  const selectedEvents = getClipboardSourceEvents();
 
-  if (!selectedEvent) {
+  if (selectedEvents.length === 0) {
     return;
   }
 
-  copiedEvent = structuredClone(selectedEvent);
+  copiedEvents = selectedEvents.map((event) => structuredClone(event));
+  copiedEventsAnchorTime = Math.min(...copiedEvents.map((event) => event.startTime));
+  copyStatusText = buildCopyStatusText(copiedEvents);
+
+  if (navigator.clipboard) {
+    void navigator.clipboard.writeText(copyStatusText).catch(() => {
+      // Browser clipboard permission is optional; the internal editor clipboard still works.
+    });
+  }
+
+  renderEventList();
 }
 
 function pasteCopiedEvent(): void {
-  if (!copiedEvent) {
+  if (copiedEvents.length === 0) {
     return;
   }
 
-  const event = structuredClone(copiedEvent);
-  event.id = `${event.id}_copy_${Date.now().toString(36)}`;
-  event.name = `${event.name} Copy`;
-  event.startTime = Number(clamp(clock.time, 0, pattern.duration).toFixed(2));
-  ensureEventEditorFields(event);
+  const pastedEvents: AttackEvent[] = [];
+  const reservedNames = new Set(pattern.events.map((event) => event.name));
+  const pasteBaseTime = clamp(clock.time, 0, pattern.duration);
+
   pushHistory();
-  if (isAttackPackageEvent(event)) {
-    event.packageId = undefined;
-    event.generatedEventIds = [];
-    pattern.events.push(event, ...createGeneratedEventsForPackage(event, pattern.stage));
-    activeInspectorTab = "package";
-  } else {
-    event.packageId = undefined;
-    event.packageLocked = undefined;
-    pattern.events.push(event);
+
+  for (const copiedEvent of copiedEvents) {
+    const event = structuredClone(copiedEvent);
+
+    event.id = createCopiedEventId(event.id);
+    event.name = getNextCopiedEventName(event.name, reservedNames);
+    event.startTime = Number(clamp(pasteBaseTime + (copiedEvent.startTime - copiedEventsAnchorTime), 0, pattern.duration).toFixed(2));
+    ensureEventEditorFields(event);
+    pastedEvents.push(event);
+
+    if (isAttackPackageEvent(event)) {
+      event.packageId = undefined;
+      event.packageLocked = undefined;
+      event.generatedEventIds = [];
+      pattern.events.push(event, ...createGeneratedEventsForPackage(event, pattern.stage));
+    } else {
+      event.packageId = undefined;
+      event.packageLocked = undefined;
+      pattern.events.push(event);
+    }
   }
-  selectedEventId = event.id;
+
+  selectedEventIds = new Set(pastedEvents.map((event) => event.id));
+  selectedEventId = pastedEvents[pastedEvents.length - 1]?.id ?? null;
+  activeInspectorTab = pastedEvents.length === 1 && isAttackPackageEvent(pastedEvents[0]) ? "package" : activeInspectorTab;
   sortEvents();
   renderEverything();
+}
+
+function getClipboardSourceEvents(): AttackEvent[] {
+  return getSelectedEvents()
+    .filter((event) => !(event.packageId && selectedEventIds.has(event.packageId)))
+    .sort((a, b) => a.startTime - b.startTime);
+}
+
+function buildCopyStatusText(events: AttackEvent[]): string {
+  const labels = events.map((event) => {
+    const parentPackage = getParentPackage(event);
+    const seed = isAttackPackageEvent(event) ? event.seed : parentPackage?.seed;
+
+    return seed ? `${event.name} seed=${seed}` : event.name;
+  });
+
+  return `Copied ${events.length}: ${labels.join(", ")}`;
+}
+
+function createCopiedEventId(baseId: string): string {
+  return `${baseId}_copy_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function getNextCopiedEventName(name: string, reservedNames: Set<string>): string {
+  const baseName = name.replace(/\s+\(\d+\)$/u, "").replace(/\s+Copy$/u, "");
+  let index = 1;
+  let nextName = `${baseName} (${index})`;
+
+  while (reservedNames.has(nextName)) {
+    index += 1;
+    nextName = `${baseName} (${index})`;
+  }
+
+  reservedNames.add(nextName);
+  return nextName;
 }
 
 function sortEvents(): void {

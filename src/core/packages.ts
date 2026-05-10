@@ -19,7 +19,7 @@ export interface PackageFieldConfig {
   max?: number;
   step?: number;
   integer?: boolean;
-  type?: "number" | "select";
+  type?: "number" | "select" | "checkbox";
   options?: Array<{ value: string; label: string }>;
   packages: AttackPackageKind[];
 }
@@ -31,6 +31,7 @@ export const packageKinds: AttackPackageKind[] = [
   "package_random_circle",
   "package_grid_square",
   "package_lag_radial",
+  "package_split_lag_radial",
   "package_random_lasers",
   "package_center_lasers",
   "package_area_parallel",
@@ -41,6 +42,7 @@ export const packageKinds: AttackPackageKind[] = [
 ];
 
 const allPackages = packageKinds;
+const packagesExcept = (...excluded: AttackPackageKind[]): AttackPackageKind[] => packageKinds.filter((kind) => !excluded.includes(kind));
 const field = (
   name: keyof AttackPackageEvent & string,
   label: string,
@@ -51,9 +53,30 @@ const field = (
   integer = false,
 ): PackageFieldConfig => ({ name, label, packages, min, max, step, integer, type: "number" });
 
+const checkboxField = (
+  name: keyof AttackPackageEvent & string,
+  label: string,
+  packages: AttackPackageKind[],
+): PackageFieldConfig => ({ name, label, packages, type: "checkbox" });
+
 export const packageFieldConfigs: PackageFieldConfig[] = [
   field("startTime", "startTime", allPackages, 0, 999, 0.1),
-  field("packageDuration", "duration", allPackages, 0.05, 30, 0.1),
+  field("packageDuration", "duration", packagesExcept("package_split_lag_radial"), 0.05, 30, 0.1),
+  field("packageDuration", "firstDuration", [
+    "package_split_lag_radial",
+  ], 0.05, 30, 0.1),
+  field("packageSplitDuration", "splitDuration", [
+    "package_split_lag_radial",
+  ], 0.05, 30, 0.1),
+  checkboxField("packageAimAtPlayer", "aimAtPlayer", [
+    "package_lag_radial",
+  ]),
+  checkboxField("packageAimAtPlayer", "firstAimAtPlayer", [
+    "package_split_lag_radial",
+  ]),
+  checkboxField("packageSplitAimAtPlayer", "splitAimAtPlayer", [
+    "package_split_lag_radial",
+  ]),
   field("packageWarningTime", "warningTime", [
     "package_repeating_lasers",
     "package_random_circle",
@@ -87,9 +110,17 @@ export const packageFieldConfigs: PackageFieldConfig[] = [
     "package_rotating_lasers",
     "package_sequential_lasers",
   ], 1, 128, 1, true),
+  field("packageCount", "firstCount", [
+    "package_split_lag_radial",
+  ], 1, 128, 1, true),
   field("packageBulletCount", "bulletCount", [
     "package_bomb_burst",
+  ], 0, 160, 1, true),
+  field("packageBulletCount", "bulletCount", [
     "package_lag_radial",
+  ], 1, 160, 1, true),
+  field("packageBulletCount", "splitCount", [
+    "package_split_lag_radial",
   ], 1, 160, 1, true),
   field("packageFuseTime", "fuseTime", [
     "package_bomb_burst",
@@ -97,8 +128,19 @@ export const packageFieldConfigs: PackageFieldConfig[] = [
   field("packageAngleWidth", "angleWidth", [
     "package_random_barrage",
     "package_bomb_burst",
-    "package_lag_radial",
   ], 0, 360, 1),
+  field("packageAngleWidth", "angleStep", [
+    "package_lag_radial",
+  ], -360, 360, 1),
+  field("packageStartAngle", "startAngle", [
+    "package_lag_radial",
+    "package_split_lag_radial",
+    "package_center_lasers",
+    "package_rotating_lasers",
+  ], -720, 720, 1),
+  field("packageSplitStartAngle", "splitStartAngle", [
+    "package_split_lag_radial",
+  ], -720, 720, 1),
   field("packageInterval", "interval", [
     "package_random_barrage",
     "package_repeating_lasers",
@@ -136,6 +178,7 @@ export const packageFieldConfigs: PackageFieldConfig[] = [
     "package_random_barrage",
     "package_bomb_burst",
     "package_lag_radial",
+    "package_split_lag_radial",
     "package_area_parallel",
     "package_enter_exit_bar",
     "package_snake_chain",
@@ -144,6 +187,7 @@ export const packageFieldConfigs: PackageFieldConfig[] = [
     "package_random_barrage",
     "package_bomb_burst",
     "package_lag_radial",
+    "package_split_lag_radial",
     "package_area_parallel",
     "package_enter_exit_bar",
     "package_snake_chain",
@@ -167,6 +211,9 @@ export const packageFieldConfigs: PackageFieldConfig[] = [
     "package_grid_square",
     "package_snake_chain",
   ], 4, 800, 1),
+  field("packageBombSize", "bombSize", [
+    "package_bomb_burst",
+  ], 4, 400, 1),
   field("packageSpeed", "speed", [
     "package_random_barrage",
     "package_bomb_burst",
@@ -175,6 +222,15 @@ export const packageFieldConfigs: PackageFieldConfig[] = [
     "package_snake_chain",
     "package_enter_exit_bar",
   ], 0, 1600, 5),
+  field("packageSpeed", "firstSpeed", [
+    "package_split_lag_radial",
+  ], 0, 1600, 5),
+  field("packageSplitSpeed", "splitSpeed", [
+    "package_split_lag_radial",
+  ], 0, 1600, 5),
+  field("packageDirectionDeg", "direction", [
+    "package_area_parallel",
+  ], -720, 720, 5),
   field("packageDistance", "distance", [
     "package_sequential_lasers",
   ], 1, 800, 1),
@@ -235,20 +291,28 @@ export function createAttackPackageEvent(kind: AttackPackageKind, startTime: num
     generatedEventIds: [],
     packageCount: 6,
     packageAngleWidth: 120,
+    packageStartAngle: 0,
     packageInterval: 0.25,
     packageThickness: 18,
     packageOrientation: "horizontal",
     packageX: stage.width / 2,
     packageY: stage.height / 2,
+    packageAimAtPlayer: 0,
+    packageSplitAimAtPlayer: 0,
     packageStartX: -80,
     packageStartY: stage.height / 2,
     packageWidth: stage.width * 0.6,
     packageHeight: stage.height * 0.5,
     packageSize: 120,
+    packageBombSize: 42,
     packageDuration: 2.2,
+    packageSplitDuration: 2.2,
     packageFuseTime: 1.2,
     packageBulletCount: 18,
     packageSpeed: 260,
+    packageSplitSpeed: 260,
+    packageSplitStartAngle: 0,
+    packageDirectionDeg: 0,
     packageDistance: 64,
     packageRotationSpeed: 60,
     packageWarningTime: 0.65,
@@ -285,6 +349,8 @@ export function getPackageKindLabel(kind: AttackPackageKind): string {
       return "グリッド四角攻撃";
     case "package_lag_radial":
       return "ラグ円形連射";
+    case "package_split_lag_radial":
+      return "分裂ラグ円形弾";
     case "package_random_lasers":
       return "ランダムレーザー";
     case "package_center_lasers":
@@ -340,6 +406,7 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
       pkg.packageDuration = 3;
       pkg.packageFuseTime = 1.15;
       pkg.packageSpeed = 280;
+      pkg.packageBombSize = 42;
       pkg.packageStartX = -80;
       pkg.packageStartY = stage.height * 0.5;
       break;
@@ -364,10 +431,21 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
     case "package_lag_radial":
       pkg.packageCount = 7;
       pkg.packageBulletCount = 14;
+      pkg.packageStartAngle = 0;
       pkg.packageAngleWidth = 18;
       pkg.packageInterval = 0.16;
       pkg.packageDuration = 2.6;
       pkg.packageSpeed = 250;
+      break;
+    case "package_split_lag_radial":
+      pkg.packageCount = 8;
+      pkg.packageBulletCount = 8;
+      pkg.packageStartAngle = 0;
+      pkg.packageSplitStartAngle = 24;
+      pkg.packageDuration = 1.05;
+      pkg.packageSplitDuration = 1.05;
+      pkg.packageSpeed = 245;
+      pkg.packageSplitSpeed = 245;
       break;
     case "package_random_lasers":
       pkg.packageCount = 5;
@@ -379,6 +457,7 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
       break;
     case "package_center_lasers":
       pkg.packageCount = 10;
+      pkg.packageStartAngle = 0;
       pkg.packageThickness = 16;
       pkg.packageLength = Math.hypot(stage.width, stage.height) * 2.25;
       pkg.packageDuration = 1.2;
@@ -391,6 +470,7 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
       pkg.packageWidth = 420;
       pkg.packageHeight = 220;
       pkg.packageSpeed = 270;
+      pkg.packageDirectionDeg = pkg.packageOrientation === "horizontal" ? 0 : 90;
       break;
     case "package_snake_chain":
       pkg.packageCount = 18;
@@ -400,7 +480,7 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
       pkg.packagePolynomialB = 0.3;
       break;
     case "package_enter_exit_bar":
-      pkg.packageLength = stage.width * 0.75;
+      pkg.packageLength = stage.width;
       pkg.packageThickness = 28;
       pkg.packageSpeed = 310;
       pkg.packageDuration = 3.2;
@@ -409,6 +489,7 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
       break;
     case "package_rotating_lasers":
       pkg.packageCount = 8;
+      pkg.packageStartAngle = 0;
       pkg.packageLength = Math.hypot(stage.width, stage.height) * 1.35;
       pkg.packageThickness = 15;
       pkg.packageRotationSpeed = 70;
@@ -444,6 +525,8 @@ function buildPackageEvents(pkg: AttackPackageEvent, stage: StageSize): AttackEv
       return buildGridSquare(pkg, stage);
     case "package_lag_radial":
       return buildLagRadial(pkg, stage);
+    case "package_split_lag_radial":
+      return buildSplitLagRadial(pkg, stage);
     case "package_random_lasers":
       return buildRandomLasers(pkg, stage);
     case "package_center_lasers":
@@ -514,12 +597,16 @@ function buildBombBurst(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[
   bomb.startY = pkg.packageStartY;
   bomb.endX = pkg.packageX;
   bomb.endY = pkg.packageY;
-  bomb.width = 42;
-  bomb.height = 42;
-  bomb.radius = 24;
+  bomb.width = pkg.packageBombSize;
+  bomb.height = pkg.packageBombSize;
+  bomb.radius = pkg.packageBombSize / 2;
   bomb.sides = 12;
   bomb.rotationSpeed = 360;
   bomb.warningTime = 0;
+
+  if (Math.round(pkg.packageBulletCount) <= 0) {
+    return [bomb];
+  }
 
   const burst = createAttackEvent("spawn_radial", pkg.startTime + pkg.packageFuseTime, stage) as SpawnRadialEvent;
   burst.name = `${pkg.name} Burst`;
@@ -527,7 +614,7 @@ function buildBombBurst(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[
   burst.color = pkg.color;
   burst.originX = pkg.packageX;
   burst.originY = pkg.packageY;
-  burst.radialCount = Math.max(1, Math.round(pkg.packageBulletCount));
+  burst.radialCount = Math.round(pkg.packageBulletCount);
   burst.radialRepeat = 1;
   burst.radialInterval = 0;
   burst.radialStartAngle = randomRange(pkg.seed + 17, -180, 180);
@@ -543,8 +630,8 @@ function buildRandomCircle(pkg: AttackPackageEvent, stage: StageSize): AttackEve
 
   for (let index = 0; index < count; index += 1) {
     const start = pkg.startTime + index * pkg.packageInterval;
-    const x = randomRange(pkg.seed + 5 + index * 17, pkg.packageSize * 0.55, stage.width - pkg.packageSize * 0.55);
-    const y = randomRange(pkg.seed + 9 + index * 23, pkg.packageSize * 0.55, stage.height - pkg.packageSize * 0.55);
+    const x = randomRange(pkg.seed + 5 + index * 17, 0, stage.width);
+    const y = randomRange(pkg.seed + 9 + index * 23, 0, stage.height);
     const warning = createAttackEvent("warningZone", Math.max(0, start - pkg.packageWarningTime), stage) as WarningZoneEvent;
     const block = createAttackEvent("movingBlock", start, stage) as MovingBlockEvent;
 
@@ -583,8 +670,8 @@ function buildRandomCircle(pkg: AttackPackageEvent, stage: StageSize): AttackEve
 function buildGridSquare(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[] {
   const events: AttackEvent[] = [];
   const size = Math.max(8, pkg.packageSize);
-  const columns = Math.max(1, Math.floor(stage.width / size));
-  const rows = Math.max(1, Math.floor(stage.height / size));
+  const columns = Math.max(1, Math.ceil(stage.width / size) + 1);
+  const rows = Math.max(1, Math.ceil(stage.height / size) + 1);
   const count = Math.max(1, Math.round(pkg.packageCount));
 
   for (let index = 0; index < count; index += 1) {
@@ -592,8 +679,8 @@ function buildGridSquare(pkg: AttackPackageEvent, stage: StageSize): AttackEvent
     const cell = Math.floor(randomRange(pkg.seed + 23 + index * 31, 0, columns * rows - 0.001));
     const col = cell % columns;
     const row = Math.floor(cell / columns);
-    const x = col * size + size / 2;
-    const y = row * size + size / 2;
+    const x = col * size;
+    const y = row * size;
     const warning = createAttackEvent("warningZone", Math.max(0, start - pkg.packageWarningTime), stage) as WarningZoneEvent;
     const block = createAttackEvent("movingBlock", start, stage) as MovingBlockEvent;
 
@@ -640,16 +727,91 @@ function buildLagRadial(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[
     event.color = pkg.color;
     event.originX = pkg.packageX;
     event.originY = pkg.packageY;
+    event.aimAtPlayer = pkg.packageAimAtPlayer;
     event.radialCount = Math.max(1, Math.round(pkg.packageBulletCount));
     event.radialRepeat = 1;
     event.radialInterval = 0;
-    event.radialStartAngle = pkg.packageAngleWidth * index;
+    event.radialStartAngle = pkg.packageStartAngle + pkg.packageAngleWidth * index;
     event.pathSpeed = pkg.packageSpeed;
     setBulletVisual(event, 0, 7);
     events.push(event);
   }
 
   return events;
+}
+
+function buildSplitLagRadial(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[] {
+  const events: AttackEvent[] = [];
+  const primaryCount = Math.max(1, Math.round(pkg.packageCount));
+  const splitCount = Math.max(1, Math.round(pkg.packageBulletCount));
+  const primaryStartAngle = pkg.packageStartAngle;
+  const splitStartTime = pkg.startTime + pkg.packageDuration;
+
+  events.push(
+    makeOneShotRadial(pkg, stage, 0, pkg.startTime, pkg.packageX, pkg.packageY, primaryCount, primaryStartAngle, `${pkg.name} Source`, {
+      aimAtPlayer: pkg.packageAimAtPlayer,
+      duration: pkg.packageDuration,
+      speed: pkg.packageSpeed,
+    }),
+  );
+
+  for (let index = 0; index < primaryCount; index += 1) {
+    const angle = primaryStartAngle + (360 / primaryCount) * index;
+    const endpoint = radialEndpoint(pkg.packageX, pkg.packageY, angle, pkg.packageSpeed, pkg.packageDuration);
+
+    events.push(
+      makeOneShotRadial(
+        pkg,
+        stage,
+        index + 1,
+        splitStartTime,
+        endpoint.x,
+        endpoint.y,
+        splitCount,
+        angle + pkg.packageSplitStartAngle,
+        `${pkg.name} Split ${index + 1}`,
+        {
+          aimAtPlayer: pkg.packageSplitAimAtPlayer,
+          duration: pkg.packageSplitDuration,
+          speed: pkg.packageSplitSpeed,
+        },
+      ),
+    );
+  }
+
+  return events;
+}
+
+function makeOneShotRadial(
+  pkg: AttackPackageEvent,
+  stage: StageSize,
+  index: number,
+  startTime: number,
+  originX: number,
+  originY: number,
+  count: number,
+  startAngle: number,
+  name: string,
+  overrides: { aimAtPlayer?: number; duration?: number; speed?: number } = {},
+): SpawnRadialEvent {
+  const event = createAttackEvent("spawn_radial", startTime, stage) as SpawnRadialEvent;
+
+  event.id = `${pkg.id}_radial_${index}_${event.id}`;
+  event.name = name;
+  event.startTime = Number(startTime.toFixed(2));
+  event.duration = overrides.duration ?? pkg.packageDuration;
+  event.color = pkg.color;
+  event.originX = originX;
+  event.originY = originY;
+  event.aimAtPlayer = overrides.aimAtPlayer ?? pkg.packageAimAtPlayer;
+  event.polarTheta = 0;
+  event.radialCount = count;
+  event.radialRepeat = 1;
+  event.radialInterval = 0;
+  event.radialStartAngle = startAngle;
+  event.pathSpeed = overrides.speed ?? pkg.packageSpeed;
+  setBulletVisual(event, 0, 7);
+  return event;
 }
 
 function buildRandomLasers(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[] {
@@ -675,7 +837,7 @@ function buildCenterLasers(pkg: AttackPackageEvent, stage: StageSize): AttackEve
   const length = Math.max(20, pkg.packageLength);
 
   for (let index = 0; index < count; index += 1) {
-    const angle = (360 / count) * index;
+    const angle = pkg.packageStartAngle + (360 / count) * index;
 
     events.push(makeAngledLaserWarning(pkg, stage, index, pkg.startTime - pkg.packageWarningTime, stage.width / 2, stage.height / 2, angle, length));
     events.push(makeAngledLaserBullet(pkg, stage, index, pkg.startTime, stage.width / 2, stage.height / 2, angle, 0, length));
@@ -687,7 +849,7 @@ function buildCenterLasers(pkg: AttackPackageEvent, stage: StageSize): AttackEve
 function buildAreaParallel(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[] {
   const events: AttackEvent[] = [];
   const count = Math.max(1, Math.round(pkg.packageCount));
-  const angle = pkg.packageOrientation === "horizontal" ? 0 : 90;
+  const angle = pkg.packageDirectionDeg;
 
   for (let index = 0; index < count; index += 1) {
     const event = makeSpread(pkg, stage, index, pkg.startTime + index * pkg.packageInterval, `${pkg.name} ${index + 1}`);
@@ -758,7 +920,7 @@ function buildRotatingLasers(pkg: AttackPackageEvent, stage: StageSize): AttackE
   const event = makeSpread(pkg, stage, 0, pkg.startTime, pkg.name);
 
   for (let index = 0; index < count; index += 1) {
-    events.push(makeAngledLaserWarning(pkg, stage, index, pkg.startTime - pkg.packageWarningTime, stage.width / 2, stage.height / 2, (360 / count) * index, pkg.packageLength));
+    events.push(makeAngledLaserWarning(pkg, stage, index, pkg.startTime - pkg.packageWarningTime, stage.width / 2, stage.height / 2, pkg.packageStartAngle + (360 / count) * index, pkg.packageLength));
   }
 
   event.originX = stage.width / 2;
@@ -766,7 +928,7 @@ function buildRotatingLasers(pkg: AttackPackageEvent, stage: StageSize): AttackE
   event.clipCount = count;
   event.clipRepeat = 1;
   event.angleStepDeg = 360 / event.clipCount;
-  event.baseAngleDeg = ((count - 1) / 2) * event.angleStepDeg;
+  event.baseAngleDeg = pkg.packageStartAngle + ((count - 1) / 2) * event.angleStepDeg;
   event.pathSpeed = 0;
   event.polarThetaVelocity = pkg.packageRotationSpeed;
   event.duration = pkg.packageDuration;
@@ -929,7 +1091,9 @@ function getPackageDuration(pkg: AttackPackageEvent): number {
 
   switch (pkg.kind) {
     case "package_bomb_burst":
-      return pkg.packageFuseTime + pkg.packageDuration;
+      return Math.round(pkg.packageBulletCount) <= 0 ? pkg.packageFuseTime : pkg.packageFuseTime + pkg.packageDuration;
+    case "package_split_lag_radial":
+      return pkg.packageDuration + pkg.packageSplitDuration;
     case "package_random_barrage":
     case "package_repeating_lasers":
     case "package_random_circle":
@@ -955,6 +1119,7 @@ function getPackageColor(kind: AttackPackageKind): number {
     package_random_circle: 0xff2f93,
     package_grid_square: 0xff4f8f,
     package_lag_radial: 0xff2f4f,
+    package_split_lag_radial: 0xff2f93,
     package_random_lasers: 0x36f5ff,
     package_center_lasers: 0x36f5ff,
     package_area_parallel: 0xff2f4f,
@@ -974,4 +1139,18 @@ function random01(seed: number): number {
 
 function randomRange(seed: number, min: number, max: number): number {
   return min + random01(seed) * (max - min);
+}
+
+function radialEndpoint(originX: number, originY: number, angleDegrees: number, speed: number, duration: number): { x: number; y: number } {
+  const distance = Math.max(0, speed) * Math.max(0, duration);
+  const angle = degreesToRadians(angleDegrees);
+
+  return {
+    x: originX + Math.cos(angle) * distance,
+    y: originY + Math.sin(angle) * distance,
+  };
+}
+
+function degreesToRadians(degrees: number): number {
+  return (degrees * Math.PI) / 180;
 }
