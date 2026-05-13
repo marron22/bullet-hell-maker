@@ -15,6 +15,7 @@ import { createStarterPattern } from "./core/samplePattern";
 import { buildAttackFrame, clearAimCache } from "./core/simulation";
 import { PlaybackClock } from "./core/playback";
 import type { AttackEvent, AttackEventKind, AttackFrame, AttackPackageEvent, BulletPattern, CurvedLaserRender, HazardRender, LaserRender, ShapeRender, TimelineSettings, WallRender } from "./core/types";
+import { buildUnitySeparatedExport } from "./core/unityExport";
 import { PreviewStage } from "./preview/PreviewStage";
 
 interface ProjectMusicAsset {
@@ -1350,25 +1351,15 @@ function exportProjectPattern(): void {
 }
 
 function exportUnityPattern(): void {
-  const unityPattern: BulletPattern = {
-    ...pattern,
-    title: `${pattern.title} Unity Export`,
-    events: getUnityExportEvents(),
-  };
+  const unityExport = buildUnitySeparatedExport(pattern);
+  const baseName = pattern.title.replace(/[^\w-]+/g, "_") || "danmaku_pattern";
 
-  downloadJson(unityPattern, `${pattern.title.replace(/[^\w-]+/g, "_") || "danmaku_pattern"}.unity.json`);
-}
+  downloadJson(unityExport.stageData, `${baseName}.stagedata.json`);
+  downloadJson(unityExport.bulletBufferCollection, `${baseName}.bulletbuffers.json`);
 
-function getUnityExportEvents(): AttackEvent[] {
-  return pattern.events
-    .filter((event) => !isAttackPackageEvent(event))
-    .map((event) => {
-      const clonedEvent = structuredClone(event) as AttackEvent;
-
-      delete clonedEvent.packageId;
-      delete clonedEvent.packageLocked;
-      return clonedEvent;
-    });
+  if (unityExport.skippedEvents.length > 0) {
+    console.warn("Some events could not be represented in the Unity StageData/BulletBuffer export.", unityExport.skippedEvents);
+  }
 }
 
 function downloadJson(value: unknown, fileName: string): void {

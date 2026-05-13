@@ -45,9 +45,11 @@ https://marron22.github.io/bullet-hell-maker/
 ## 書き出し
 
 - プロジェクト書き出し: 画面の状態を再現するための保存形式です。パッケージ、生成済み攻撃、タイムライン、BPM設定などを含みます。
-- Unity向け書き出し: パッケージ自体は含めず、通常攻撃とパッケージから生成された実際の攻撃データだけを書き出します。
+- Unity向け書き出し: `*.stagedata.json` と `*.bulletbuffers.json` の2つを書き出します。パッケージ自体は含めず、パッケージから生成された実際の攻撃を StageData / BulletBuffer 形式に変換します。
 
 プロジェクトを後から再編集したい場合は、必ず「プロジェクト書き出し」を使ってください。
+
+Unity向け書き出しでは、StageData 側の `bulletSpawners[].clipName` が BulletBuffers 側の `bulletBuffers[].name` を参照します。座標はプレビュー画面を Unity 側の左下原点、右上 `(18, 36)` のワールドとして扱い、Y軸は Unity に合わせて上向きに変換します。
 
 ## キーボードショートカット
 
