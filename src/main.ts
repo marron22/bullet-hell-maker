@@ -2,21 +2,26 @@ import "./styles.css";
 import { createAttackEvent } from "./core/eventFactory";
 import { applyAttackTemplate } from "./core/eventTemplates";
 import {
+  canGeneratePackageEvents,
   createAttackPackageEvent,
   createGeneratedEventsForPackage,
+  getAvailablePackageKinds,
+  getPackageIcon,
   getPackageFieldConfigs,
   getPackageKindLabel,
   isAttackPackageEvent,
   isAttackPackageKind,
-  packageKinds,
+  isCustomAttackPackageKindName,
+  isMissingCustomPackageDefinition,
+  registerCustomPackageDefinition,
   type PackageFieldConfig,
 } from "./core/packages";
 import { createStarterPattern } from "./core/samplePattern";
 import { buildAttackFrame, clearAimCache } from "./core/simulation";
 import { PlaybackClock } from "./core/playback";
-import type { AttackEvent, AttackEventKind, AttackFrame, AttackPackageEvent, BulletPattern, CurvedLaserRender, HazardRender, LaserRender, ShapeRender, TimelineSettings, WallRender } from "./core/types";
+import type { AttackEvent, AttackEventKind, AttackFrame, AttackPackageEvent, AttackPackageKind, BulletPattern, CurvedLaserRender, HazardRender, LaserRender, ShapeRender, TimelineSettings, WallRender } from "./core/types";
 import { buildUnitySeparatedExport } from "./core/unityExport";
-import { PreviewStage } from "./preview/PreviewStage";
+import { PreviewStage, type PackageHandleRender } from "./preview/PreviewStage";
 
 interface ProjectMusicAsset {
   name: string;
@@ -25,8 +30,15 @@ interface ProjectMusicAsset {
   volume: number;
 }
 
+interface ProjectCustomPackageAsset {
+  kind: string;
+  name: string;
+  code: string;
+}
+
 type ProjectPatternFile = Partial<BulletPattern> & {
   music?: ProjectMusicAsset | null;
+  customPackages?: ProjectCustomPackageAsset[];
 };
 
 let pattern = createStarterPattern();
@@ -46,6 +58,7 @@ let copiedEvents: AttackEvent[] = [];
 let copiedEventsAnchorTime = 0;
 let copyStatusText = "";
 let projectMusicAsset: ProjectMusicAsset | null = null;
+const projectCustomPackageAssets = new Map<string, ProjectCustomPackageAsset>();
 let timelineZoom = 1;
 let markerDragHistoryRecorded = false;
 let snapToMeasures = false;
@@ -65,6 +78,7 @@ let inspectorPanelWidth = 380;
 let activeResizeTarget: "timeline" | "inspector" | null = null;
 let suppressNextPlayClick = false;
 let suppressNextResetClick = false;
+let activePackageHandleId: string | null = null;
 
 const defaultMusicVolume = 0.8;
 const audio = new Audio();
@@ -448,6 +462,8 @@ appRoot.innerHTML = `
             <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="boss-fan">${iconSvg("fan")}<span>ボス扇弾</span></button>
             <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="polynomial-radial">${iconSvg("curve")}<span>カーブ回転弾</span></button>
             <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="curved-laser-ring">${iconSvg("burst")}<span>8方向カーブレーザー</span></button>
+            <button id="import-package-button" class="menu-item" type="button">${iconSvg("upload")}<span>コードからパッケージを追加</span></button>
+            <div id="package-menu-items" class="package-menu-items"></div>
           </div>
         </div>
       </nav>
@@ -458,6 +474,7 @@ appRoot.innerHTML = `
       </div>
       <div class="hidden-inputs">
         <input id="import-input" type="file" accept="application/json,.json" hidden />
+        <input id="package-code-input" type="file" accept=".mjs,text/javascript,application/javascript" hidden />
         <input id="music-input" type="file" accept="audio/*" hidden />
       </div>
       <div class="toolbar-spacer"></div>
@@ -525,7 +542,7 @@ appRoot.innerHTML = `
   </div>
 `;
 
-document.querySelector<HTMLElement>('[data-menu="add"]')?.insertAdjacentHTML("beforeend", renderPackageMenuItems());
+document.querySelector<HTMLElement>("#package-menu-items")?.insertAdjacentHTML("beforeend", renderPackageMenuItems());
 document.querySelector<HTMLElement>("#export-button")?.insertAdjacentHTML(
   "afterend",
   `<button id="export-unity-button" class="menu-item" type="button">${iconSvg("download")}<span>Unity向け書き出し</span></button>`,
@@ -550,10 +567,12 @@ const resetButton = requireElement<HTMLButtonElement>("#reset-button");
 const exportButton = requireElement<HTMLButtonElement>("#export-button");
 const exportUnityButton = requireElement<HTMLButtonElement>("#export-unity-button");
 const importButton = requireElement<HTMLButtonElement>("#import-button");
+const importPackageButton = requireElement<HTMLButtonElement>("#import-package-button");
 const musicButton = requireElement<HTMLButtonElement>("#music-button");
 const undoButton = requireElement<HTMLButtonElement>("#undo-button");
 const redoButton = requireElement<HTMLButtonElement>("#redo-button");
 const importInput = requireElement<HTMLInputElement>("#import-input");
+const packageCodeInput = requireElement<HTMLInputElement>("#package-code-input");
 const musicInput = requireElement<HTMLInputElement>("#music-input");
 const timeDisplay = requireElement<HTMLDivElement>("#time-display");
 const musicDisplay = requireElement<HTMLDivElement>("#music-display");
@@ -575,6 +594,8 @@ const musicVolumeInput = requireElement<HTMLInputElement>("#music-volume-input")
 const timelineZoomDisplay = requireElement<HTMLSpanElement>("#timeline-zoom-display");
 const timelineResizeHandle = requireElement<HTMLDivElement>("#timeline-resize-handle");
 const inspectorResizeHandle = requireElement<HTMLDivElement>("#inspector-resize-handle");
+const addMenu = requireElement<HTMLDivElement>('[data-menu="add"]');
+const packageMenuItems = requireElement<HTMLDivElement>("#package-menu-items");
 const menuButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-menu-button]")];
 const menuPopovers = [...document.querySelectorAll<HTMLDivElement>("[data-menu]")];
 const inspectorTabButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-inspector-tab]")];
@@ -583,6 +604,7 @@ const editorModeButtons = [...document.querySelectorAll<HTMLButtonElement>("[dat
 
 const preview = new PreviewStage(pattern.stage);
 await preview.mount(previewHost);
+preview.setPackageHandleDragCallback(handlePackageHandleDrag);
 syncLayoutSizeVariables();
 exportButton.querySelector("span")!.textContent = "プロジェクト書き出し";
 
@@ -706,6 +728,11 @@ importButton.addEventListener("click", () => {
   importInput.click();
 });
 
+importPackageButton.addEventListener("click", () => {
+  closeMenus();
+  packageCodeInput.click();
+});
+
 musicButton.addEventListener("click", () => {
   closeMenus();
   musicInput.click();
@@ -749,6 +776,17 @@ importInput.addEventListener("change", () => {
   importInput.value = "";
 });
 
+packageCodeInput.addEventListener("change", () => {
+  const file = packageCodeInput.files?.[0];
+
+  if (!file) {
+    return;
+  }
+
+  void importPackageCodeFile(file);
+  packageCodeInput.value = "";
+});
+
 musicInput.addEventListener("change", () => {
   const file = musicInput.files?.[0];
 
@@ -783,11 +821,29 @@ previewResizeObserver.observe(previewPanel);
 window.addEventListener("resize", resizeTimelineToViewport);
 window.addEventListener("resize", resizePreviewHost);
 
-document.querySelectorAll<HTMLButtonElement>("[data-add-kind]").forEach((button) => {
-  button.addEventListener("click", () => {
-    const kind = button.dataset.addKind as AttackEventKind;
+addMenu.addEventListener("click", handleAddMenuClick);
 
-    if (isAttackPackageKind(kind)) {
+function handleAddMenuClick(event: MouseEvent): void {
+  const target = event.target;
+
+  if (!(target instanceof Element)) {
+    return;
+  }
+
+  const button = target.closest<HTMLButtonElement>("[data-add-kind]");
+
+  if (!button || !addMenu.contains(button)) {
+    return;
+  }
+
+  const kind = button.dataset.addKind;
+
+  if (!kind || !isAttackEventKind(kind)) {
+    return;
+  }
+
+  if (isAttackPackageKind(kind)) {
+    try {
       const packageEvent = createAttackPackageEvent(kind, clock.time, pattern.stage);
       const generatedEvents = createGeneratedEventsForPackage(packageEvent, pattern.stage);
 
@@ -797,21 +853,24 @@ document.querySelectorAll<HTMLButtonElement>("[data-add-kind]").forEach((button)
       activeInspectorTab = "package";
       closeMenus();
       renderEverything();
-      return;
+    } catch (error) {
+      console.error(error);
+      window.alert("パッケージを生成できませんでした。読み込んだコードを確認してください。");
     }
+    return;
+  }
 
-    const event = createAttackEvent(kind, clock.time, pattern.stage);
+  const attackEvent = createAttackEvent(kind, clock.time, pattern.stage);
 
-    applyAttackTemplate(event, button.dataset.addTemplate, pattern.stage);
-    ensureEventEditorFields(event);
-    pushHistory();
-    pattern.events.push(event);
-    sortEvents();
-    selectSingleEvent(event.id);
-    closeMenus();
-    renderEverything();
-  });
-});
+  applyAttackTemplate(attackEvent, button.dataset.addTemplate, pattern.stage);
+  ensureEventEditorFields(attackEvent);
+  pushHistory();
+  pattern.events.push(attackEvent);
+  sortEvents();
+  selectSingleEvent(attackEvent.id);
+  closeMenus();
+  renderEverything();
+}
 
 document.addEventListener("keydown", (event) => {
   const usesCommandKey = event.ctrlKey || event.metaKey;
@@ -1345,9 +1404,20 @@ function exportProjectPattern(): void {
           volume: audio.volume,
         }
       : null,
+    customPackages: getProjectCustomPackageAssets(),
   };
 
   downloadJson(projectPattern, `${pattern.title.replace(/[^\w-]+/g, "_") || "danmaku_project"}.project.json`);
+}
+
+function getProjectCustomPackageAssets(): ProjectCustomPackageAsset[] {
+  const usedKinds = new Set<string>(
+    pattern.events
+      .filter((event): event is AttackPackageEvent => isAttackPackageEvent(event) && isCustomAttackPackageKindName(event.kind))
+      .map((event) => event.kind),
+  );
+
+  return [...projectCustomPackageAssets.values()].filter((asset) => usedKinds.has(asset.kind));
 }
 
 function exportUnityPattern(): void {
@@ -1383,6 +1453,7 @@ async function importPattern(file: File): Promise<void> {
       throw new Error("Invalid pattern file.");
     }
 
+    await importEmbeddedCustomPackages(parsed.customPackages);
     pushHistory();
     pattern = {
       version: 1,
@@ -1411,6 +1482,78 @@ async function importPattern(file: File): Promise<void> {
     console.error(error);
     window.alert("JSONを読み込めませんでした。弾幕データの形式を確認してください。");
   }
+}
+
+async function importPackageCodeFile(file: File): Promise<void> {
+  if (!file.name.endsWith(".mjs")) {
+    window.alert(".mjs ファイルを選択してください。");
+    return;
+  }
+
+  if (!window.confirm("選択した .mjs のコードをこのページで実行します。信頼できるファイルだけ読み込んでください。")) {
+    return;
+  }
+
+  try {
+    const code = await file.text();
+    const kind = await importCustomPackageCode(file.name, code);
+
+    window.alert(`${getPackageKindLabel(kind)} を追加しました。追加メニューから使えます。`);
+  } catch (error) {
+    console.error(error);
+    window.alert(".mjs パッケージを読み込めませんでした。コードの形式を確認してください。");
+  }
+}
+
+async function importEmbeddedCustomPackages(assets: ProjectPatternFile["customPackages"]): Promise<void> {
+  if (!Array.isArray(assets) || assets.length === 0) {
+    return;
+  }
+
+  if (!window.confirm("このプロジェクトには custom パッケージコードが含まれています。読み込むにはコードを実行する必要があります。")) {
+    return;
+  }
+
+  for (const asset of assets) {
+    if (!asset || typeof asset.code !== "string") {
+      continue;
+    }
+
+    try {
+      await importCustomPackageCode(asset.name || `${asset.kind || "custom_package"}.mjs`, asset.code, asset.kind);
+    } catch (error) {
+      console.error(error);
+      window.alert(`${asset.kind || asset.name || "custom package"} を読み込めませんでした。既存の生成済み攻撃は保持されます。`);
+    }
+  }
+}
+
+async function importCustomPackageCode(fileName: string, code: string, expectedKind?: string): Promise<AttackPackageKind> {
+  const blob = new Blob([code], { type: "text/javascript" });
+  const url = URL.createObjectURL(blob);
+
+  try {
+    const module = await import(/* @vite-ignore */ url) as { default?: unknown; packageDefinition?: unknown };
+    const definition = registerCustomPackageDefinition(module.default ?? module.packageDefinition);
+
+    if (expectedKind && definition.kind !== expectedKind) {
+      throw new Error(`Embedded package kind mismatch: expected ${expectedKind}, got ${definition.kind}.`);
+    }
+
+    projectCustomPackageAssets.set(definition.kind, {
+      kind: definition.kind,
+      name: fileName,
+      code,
+    });
+    renderPackageMenu();
+    return definition.kind;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function renderPackageMenu(): void {
+  packageMenuItems.innerHTML = renderPackageMenuItems();
 }
 
 async function loadMusic(file: File): Promise<void> {
@@ -1505,7 +1648,7 @@ function normalizeImportedEvent(rawEvent: unknown, stage: BulletPattern["stage"]
 }
 
 function isAttackEventKind(kind: string): kind is AttackEventKind {
-  return allKinds().includes(kind as AttackEventKind);
+  return allKinds().includes(kind as AttackEventKind) || isCustomAttackPackageKindName(kind);
 }
 
 function renderEverything(): void {
@@ -1625,6 +1768,7 @@ function renderPreview(): void {
   const previewEvents = getPreviewEvents();
   const playerPosition = preview.getPlayerPosition();
   const frame = buildAttackFrame(previewEvents, clock.time, pattern.stage, playerPosition);
+  const packageHandles = buildPackagePreviewHandles();
 
   if (editorMode === "preview") {
     updatePreviewHitState(frame, playerPosition);
@@ -1641,6 +1785,8 @@ function renderPreview(): void {
     editEventId: editingEventId,
     trajectories: buildVisibleTrajectories(),
     playerAlpha: dashTimeRemaining > 0 ? 0.45 : 1,
+    packageHandles,
+    activePackageHandleId: packageHandles.some((handle) => handle.id === activePackageHandleId) ? activePackageHandleId : null,
   });
 }
 
@@ -1649,6 +1795,138 @@ function getPreviewEvents(): AttackEvent[] {
   const events = editorMode === "trajectory" ? (editingEvent ? [editingEvent] : []) : pattern.events;
 
   return events.filter((event) => !isAttackPackageEvent(event) && isEventVisible(event) && isParentPackageVisible(event));
+}
+
+type PackageHandleRole = "source" | "target" | "start" | "area" | "center" | "position";
+
+function buildPackagePreviewHandles(): PackageHandleRender[] {
+  if (editorMode === "preview" || activeInspectorTab !== "package") {
+    return [];
+  }
+
+  const packageEvent = getSelectedPackageEvent();
+
+  if (!packageEvent) {
+    return [];
+  }
+
+  const sourceColor = packageEvent.color;
+  const secondaryColor = 0xffd166;
+  const areaColor = 0x27dfff;
+  const handles: PackageHandleRender[] = [];
+  const addHandle = (role: PackageHandleRole, x: number, y: number, color = sourceColor, secondary = false) => {
+    handles.push({
+      id: getPackageHandleId(packageEvent, role),
+      x: clamp(x, 0, pattern.stage.width),
+      y: clamp(y, 0, pattern.stage.height),
+      color,
+      secondary,
+    });
+  };
+
+  switch (packageEvent.kind) {
+    case "package_random_barrage":
+    case "package_lag_radial":
+    case "package_split_lag_radial":
+    case "package_snake_chain":
+      addHandle("source", packageEvent.packageX, packageEvent.packageY);
+      break;
+    case "package_bomb_burst":
+      addHandle("start", packageEvent.packageStartX, packageEvent.packageStartY, secondaryColor, true);
+      addHandle("target", packageEvent.packageX, packageEvent.packageY);
+      break;
+    case "package_random_circle":
+    case "package_grid_square":
+    case "package_random_lasers":
+    case "package_area_parallel":
+      addHandle("area", packageEvent.packageX, packageEvent.packageY, areaColor);
+      break;
+    case "package_center_lasers":
+    case "package_rotating_lasers":
+      addHandle("center", packageEvent.packageX, packageEvent.packageY, areaColor);
+      break;
+    case "package_repeating_lasers":
+    case "package_sequential_lasers":
+      addHandle(
+        "position",
+        packageEvent.packageOrientation === "horizontal" ? pattern.stage.width / 2 : packageEvent.packageInitialPosition,
+        packageEvent.packageOrientation === "horizontal" ? packageEvent.packageInitialPosition : pattern.stage.height / 2,
+        areaColor,
+      );
+      break;
+    case "package_enter_exit_bar":
+      addHandle("source", packageEvent.packageX, packageEvent.packageY);
+      break;
+  }
+
+  return handles;
+}
+
+function getPackageHandleId(packageEvent: AttackPackageEvent, role: PackageHandleRole): string {
+  return `${packageEvent.id}:${role}`;
+}
+
+function parsePackageHandleId(handleId: string): { packageId: string; role: PackageHandleRole } | undefined {
+  const separatorIndex = handleId.lastIndexOf(":");
+
+  if (separatorIndex < 0) {
+    return undefined;
+  }
+
+  const packageId = handleId.slice(0, separatorIndex);
+  const role = handleId.slice(separatorIndex + 1) as PackageHandleRole;
+
+  if (!["source", "target", "start", "area", "center", "position"].includes(role)) {
+    return undefined;
+  }
+
+  return { packageId, role };
+}
+
+function handlePackageHandleDrag(handleId: string, point: { x: number; y: number }, phase: "start" | "move" | "end"): void {
+  const handle = parsePackageHandleId(handleId);
+
+  if (!handle) {
+    return;
+  }
+
+  const packageEvent = pattern.events.find((event): event is AttackPackageEvent => event.id === handle.packageId && isAttackPackageEvent(event));
+
+  if (!packageEvent || editorMode === "preview") {
+    return;
+  }
+
+  activePackageHandleId = handleId;
+
+  if (phase === "start") {
+    pushHistory();
+    selectSingleEvent(packageEvent.id);
+    activeInspectorTab = "package";
+  }
+
+  applyPackageHandlePoint(packageEvent, handle.role, point);
+  refreshPackageGeneratedEvents(packageEvent);
+  clearAimCache();
+  renderEverything();
+}
+
+function applyPackageHandlePoint(packageEvent: AttackPackageEvent, role: PackageHandleRole, point: { x: number; y: number }): void {
+  const x = clamp(point.x, 0, pattern.stage.width);
+  const y = clamp(point.y, 0, pattern.stage.height);
+
+  if (role === "start") {
+    packageEvent.packageStartX = x;
+    packageEvent.packageStartY = y;
+    return;
+  }
+
+  if (role === "position") {
+    packageEvent.packageInitialPosition = packageEvent.packageOrientation === "horizontal" ? y : x;
+    return;
+  }
+
+  packageEvent.packageX = x;
+  packageEvent.packageY = y;
 }
 
 function syncTrajectoryModeNotice(): void {
@@ -2336,11 +2614,15 @@ function renderPackagePanel(): void {
 
   const childEvents = getPackageChildren(packageEvent);
   const fields = getPackageFieldConfigs(packageEvent);
+  const missingDefinitionNotice = isMissingCustomPackageDefinition(packageEvent)
+    ? `<p class="package-warning">この custom パッケージの .mjs はまだ読み込まれていません。生成済み攻撃は保持されますが、再生成には元の .mjs が必要です。</p>`
+    : "";
 
   packagePanel.innerHTML = `
     <div class="property-event-name">
       <input class="event-name-input" name="name" type="text" value="${escapeHtml(packageEvent.name)}" aria-label="package name" />
     </div>
+    ${missingDefinitionNotice}
     <div class="property-group">
       <h3>Package</h3>
       <div class="property-group-fields">
@@ -2357,14 +2639,55 @@ function renderPackagePanel(): void {
 }
 
 function renderPackageMenuItems(): string {
-  return packageKinds
-    .map((kind) => `<button class="menu-item package-menu-item" type="button" data-add-kind="${kind}">${iconSvg("package")}<span>${getPackageKindLabel(kind)}</span></button>`)
+  return getAvailablePackageKinds()
+    .map((kind) => `<button class="menu-item package-menu-item" type="button" data-add-kind="${kind}">${iconSvg(getPackageMenuIcon(kind))}<span>${getPackageKindLabel(kind)}</span></button>`)
     .join("");
+}
+
+function getPackageMenuIcon(kind: AttackPackageKind): string {
+  const customIcon = getPackageIcon(kind);
+
+  if (customIcon) {
+    return customIcon;
+  }
+
+  switch (kind) {
+    case "package_random_barrage":
+      return "scatter";
+    case "package_repeating_lasers":
+      return "laserRows";
+    case "package_bomb_burst":
+      return "bomb";
+    case "package_random_circle":
+      return "circleArea";
+    case "package_grid_square":
+      return "grid";
+    case "package_lag_radial":
+      return "burst";
+    case "package_split_lag_radial":
+      return "splitBurst";
+    case "package_random_lasers":
+      return "laserScatter";
+    case "package_center_lasers":
+      return "radialLaser";
+    case "package_area_parallel":
+      return "areaParallel";
+    case "package_snake_chain":
+      return "snake";
+    case "package_enter_exit_bar":
+      return "enterExit";
+    case "package_rotating_lasers":
+      return "rotatingLaser";
+    case "package_sequential_lasers":
+      return "sequentialLaser";
+    default:
+      return "package";
+  }
 }
 
 function renderPackageField(event: AttackPackageEvent, field: PackageFieldConfig): string {
   const value = (event as unknown as Record<string, string | number>)[field.name];
-  const title = getPropertyTooltip(field.name);
+  const title = field.description ? escapeHtml(field.description) : getPropertyTooltip(field.name);
 
   if (field.type === "checkbox") {
     return `
@@ -3526,8 +3849,22 @@ function getPackageChildren(packageEvent: AttackPackageEvent): AttackEvent[] {
 }
 
 function refreshPackageGeneratedEvents(packageEvent: AttackPackageEvent): void {
+  if (!canGeneratePackageEvents(packageEvent)) {
+    return;
+  }
+
+  let generatedEvents: AttackEvent[];
+
+  try {
+    generatedEvents = createGeneratedEventsForPackage(packageEvent, pattern.stage);
+  } catch (error) {
+    console.error(error);
+    window.alert("パッケージを再生成できませんでした。設定または .mjs コードを確認してください。");
+    return;
+  }
+
   pattern.events = pattern.events.filter((event) => event.packageId !== packageEvent.id);
-  pattern.events.push(...createGeneratedEventsForPackage(packageEvent, pattern.stage));
+  pattern.events.push(...generatedEvents);
   sortEvents();
 }
 
@@ -3539,10 +3876,18 @@ function ensurePackageChildren(): void {
       continue;
     }
 
+    if (!canGeneratePackageEvents(event)) {
+      continue;
+    }
+
     const childCount = pattern.events.filter((candidate) => candidate.packageId === event.id).length;
 
     if (childCount === 0) {
-      generatedEvents.push(...createGeneratedEventsForPackage(event, pattern.stage));
+      try {
+        generatedEvents.push(...createGeneratedEventsForPackage(event, pattern.stage));
+      } catch (error) {
+        console.error(error);
+      }
     }
   }
 
@@ -3581,7 +3926,7 @@ function allKinds(): AttackEventKind[] {
     "wallSweep",
     "laserBeam",
     "rotatingShape",
-    ...packageKinds,
+    ...getAvailablePackageKinds(),
   ];
 }
 
@@ -3723,6 +4068,19 @@ function iconSvg(name: string): string {
     wall: '<path d="M4 5h16v14H4z"></path><path d="M4 10h16"></path><path d="M9 5v5"></path><path d="M15 10v9"></path>',
     laser: '<path d="M4 12h16"></path><path d="m16 8 4 4-4 4"></path><path d="M4 8v8"></path>',
     rotate: '<path d="M21 12a9 9 0 1 1-3-6.7"></path><path d="M21 4v6h-6"></path>',
+    scatter: '<circle cx="6" cy="12" r="2"></circle><circle cx="14" cy="7" r="1.7"></circle><circle cx="17" cy="15" r="1.7"></circle><path d="M8 11 18 5"></path><path d="M8 13l12 6"></path>',
+    laserRows: '<path d="M4 7h16"></path><path d="M4 12h16"></path><path d="M4 17h16"></path><path d="m17 4 3 3-3 3"></path><path d="m17 14 3 3-3 3"></path>',
+    bomb: '<circle cx="11" cy="13" r="7"></circle><path d="M15.5 7.5 19 4"></path><path d="M18 4h3v3"></path><path d="M8 13h6"></path><path d="M11 10v6"></path>',
+    circleArea: '<circle cx="12" cy="12" r="7"></circle><circle cx="12" cy="12" r="3"></circle><path d="M5 5 3 3"></path><path d="M19 5l2-2"></path><path d="M5 19l-2 2"></path><path d="M19 19l2 2"></path>',
+    grid: '<rect x="4" y="4" width="16" height="16" rx="1"></rect><path d="M4 10h16"></path><path d="M4 16h16"></path><path d="M10 4v16"></path><path d="M16 4v16"></path>',
+    splitBurst: '<circle cx="7" cy="12" r="2"></circle><path d="M9 12h4"></path><circle cx="17" cy="7" r="2"></circle><circle cx="17" cy="17" r="2"></circle><path d="M13 12 16 8.5"></path><path d="M13 12l3 3.5"></path>',
+    laserScatter: '<path d="M4 19 20 5"></path><path d="M3 10h10"></path><path d="M11 21h10"></path><path d="M17 3h4v4"></path>',
+    radialLaser: '<circle cx="12" cy="12" r="2"></circle><path d="M12 2v6"></path><path d="M12 16v6"></path><path d="M2 12h6"></path><path d="M16 12h6"></path><path d="m4.9 4.9 4.2 4.2"></path><path d="m14.9 14.9 4.2 4.2"></path><path d="m19.1 4.9-4.2 4.2"></path><path d="m9.1 14.9-4.2 4.2"></path>',
+    areaParallel: '<rect x="4" y="6" width="16" height="12" rx="1"></rect><path d="M7 10h10"></path><path d="M7 14h10"></path><path d="m15 8 2 2-2 2"></path><path d="m15 12 2 2-2 2"></path>',
+    snake: '<path d="M4 16c3-8 6 8 9 0s4-8 7-2"></path><rect x="3" y="14" width="4" height="4" rx="1"></rect><rect x="17" y="10" width="4" height="4" rx="1"></rect>',
+    enterExit: '<path d="M4 6v12"></path><path d="M20 6v12"></path><path d="M7 12h10"></path><path d="m14 8 4 4-4 4"></path>',
+    rotatingLaser: '<path d="M12 12h9"></path><path d="M12 12l-7 5"></path><path d="M12 12 6 5"></path><circle cx="12" cy="12" r="2"></circle><path d="M21 8a9 9 0 0 0-13-5"></path><path d="M7 2h4v4"></path>',
+    sequentialLaser: '<path d="M5 6h14"></path><path d="M5 12h14"></path><path d="M5 18h14"></path><circle cx="5" cy="6" r="1.5"></circle><circle cx="9" cy="12" r="1.5"></circle><circle cx="13" cy="18" r="1.5"></circle>',
   };
 
   return `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] ?? ""}</svg>`;

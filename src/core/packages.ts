@@ -4,8 +4,11 @@ import type {
   AttackPackageEvent,
   AttackPackageKind,
   BeatPulseRingEvent,
+  BuiltInAttackPackageKind,
   BulletMotionFields,
+  CustomAttackPackageKind,
   MovingBlockEvent,
+  NormalAttackEventKind,
   SpawnBulletSpreadEvent,
   SpawnRadialEvent,
   StageSize,
@@ -13,8 +16,9 @@ import type {
 } from "./types";
 
 export interface PackageFieldConfig {
-  name: keyof AttackPackageEvent & string;
+  name: string;
   label: string;
+  description?: string;
   min?: number;
   max?: number;
   step?: number;
@@ -24,7 +28,48 @@ export interface PackageFieldConfig {
   packages: AttackPackageKind[];
 }
 
-export const packageKinds: AttackPackageKind[] = [
+export interface CustomPackageDefinition {
+  kind: CustomAttackPackageKind;
+  label: string;
+  description?: string;
+  color: number;
+  icon?: string;
+  fields: PackageFieldConfig[];
+  defaults?: (context: CustomPackageDefaultsContext) => Record<string, unknown>;
+  build: (context: CustomPackageBuildContext) => AttackEvent[];
+  getDuration?: (context: CustomPackageDurationContext) => number;
+}
+
+export interface CustomPackageDefaultsContext {
+  stage: StageSize;
+  helpers: CustomPackageStaticHelpers;
+}
+
+export interface CustomPackageBuildContext {
+  pkg: AttackPackageEvent;
+  stage: StageSize;
+  helpers: CustomPackageBuildHelpers;
+}
+
+export interface CustomPackageDurationContext {
+  pkg: AttackPackageEvent;
+  generatedEvents: AttackEvent[];
+}
+
+export interface CustomPackageStaticHelpers {
+  clamp: (value: number, min: number, max: number) => number;
+  random01: (seed: number) => number;
+  randomRange: (seed: number, min: number, max: number) => number;
+  degreesToRadians: (degrees: number) => number;
+}
+
+export interface CustomPackageBuildHelpers extends CustomPackageStaticHelpers {
+  createAttackEvent: (kind: NormalAttackEventKind, startTime: number) => AttackEvent;
+  setBulletVisual: (event: BulletMotionFields, typeId: number, size: number) => void;
+  setLaserVisual: (event: BulletMotionFields, length: number, thickness: number, visualAngle: number) => void;
+}
+
+export const packageKinds: BuiltInAttackPackageKind[] = [
   "package_random_barrage",
   "package_repeating_lasers",
   "package_bomb_burst",
@@ -41,10 +86,12 @@ export const packageKinds: AttackPackageKind[] = [
   "package_sequential_lasers",
 ];
 
-const allPackages = packageKinds;
+const customPackageDefinitions = new Map<CustomAttackPackageKind, CustomPackageDefinition>();
+const customPackageKindPattern = /^custom_[a-z0-9_]+$/;
+const allPackages: AttackPackageKind[] = packageKinds;
 const packagesExcept = (...excluded: AttackPackageKind[]): AttackPackageKind[] => packageKinds.filter((kind) => !excluded.includes(kind));
 const field = (
-  name: keyof AttackPackageEvent & string,
+  name: string,
   label: string,
   packages: AttackPackageKind[],
   min = 0,
@@ -54,7 +101,7 @@ const field = (
 ): PackageFieldConfig => ({ name, label, packages, min, max, step, integer, type: "number" });
 
 const checkboxField = (
-  name: keyof AttackPackageEvent & string,
+  name: string,
   label: string,
   packages: AttackPackageKind[],
 ): PackageFieldConfig => ({ name, label, packages, type: "checkbox" });
@@ -177,18 +224,28 @@ export const packageFieldConfigs: PackageFieldConfig[] = [
   field("packageX", "x", [
     "package_random_barrage",
     "package_bomb_burst",
+    "package_random_circle",
+    "package_grid_square",
     "package_lag_radial",
     "package_split_lag_radial",
+    "package_random_lasers",
+    "package_center_lasers",
     "package_area_parallel",
+    "package_rotating_lasers",
     "package_enter_exit_bar",
     "package_snake_chain",
   ], -1000, 2000, 1),
   field("packageY", "y", [
     "package_random_barrage",
     "package_bomb_burst",
+    "package_random_circle",
+    "package_grid_square",
     "package_lag_radial",
     "package_split_lag_radial",
+    "package_random_lasers",
+    "package_center_lasers",
     "package_area_parallel",
+    "package_rotating_lasers",
     "package_enter_exit_bar",
     "package_snake_chain",
   ], -1000, 2000, 1),
@@ -201,10 +258,14 @@ export const packageFieldConfigs: PackageFieldConfig[] = [
   field("packageWidth", "width", [
     "package_area_parallel",
     "package_grid_square",
+    "package_random_circle",
+    "package_random_lasers",
   ], 8, 1600, 1),
   field("packageHeight", "height", [
     "package_area_parallel",
     "package_grid_square",
+    "package_random_circle",
+    "package_random_lasers",
   ], 8, 1200, 1),
   field("packageSize", "size", [
     "package_random_circle",
@@ -238,6 +299,7 @@ export const packageFieldConfigs: PackageFieldConfig[] = [
     "package_snake_chain",
   ], 0, 2, 0.02),
   field("packageInitialPosition", "initialPosition", [
+    "package_repeating_lasers",
     "package_sequential_lasers",
   ], -1200, 2000, 1),
   field("packageLength", "length", [
@@ -268,12 +330,170 @@ export const packageFieldConfigs: PackageFieldConfig[] = [
 
 let packageSerial = 5000;
 
-export function isAttackPackageKind(kind: string): kind is AttackPackageKind {
+export function registerCustomPackageDefinition(rawDefinition: unknown): CustomPackageDefinition {
+  const definition = normalizeCustomPackageDefinition(rawDefinition);
+
+  customPackageDefinitions.set(definition.kind, definition);
+  return definition;
+}
+
+export function getAvailablePackageKinds(): AttackPackageKind[] {
+  return [...packageKinds, ...customPackageDefinitions.keys()];
+}
+
+export function getCustomPackageDefinition(kind: string): CustomPackageDefinition | undefined {
+  return customPackageDefinitions.get(kind as CustomAttackPackageKind);
+}
+
+export function isBuiltInPackageKind(kind: string): kind is BuiltInAttackPackageKind {
   return (packageKinds as string[]).includes(kind);
+}
+
+export function isCustomAttackPackageKindName(kind: string): kind is CustomAttackPackageKind {
+  return customPackageKindPattern.test(kind);
+}
+
+export function canGeneratePackageEvents(pkg: AttackPackageEvent): boolean {
+  return isBuiltInPackageKind(pkg.kind) || customPackageDefinitions.has(pkg.kind as CustomAttackPackageKind);
+}
+
+export function isMissingCustomPackageDefinition(pkg: AttackPackageEvent): boolean {
+  return isCustomAttackPackageKindName(pkg.kind) && !customPackageDefinitions.has(pkg.kind as CustomAttackPackageKind);
+}
+
+export function getPackageIcon(kind: AttackPackageKind): string | undefined {
+  return customPackageDefinitions.get(kind as CustomAttackPackageKind)?.icon;
+}
+
+export function isAttackPackageKind(kind: string): kind is AttackPackageKind {
+  return isBuiltInPackageKind(kind) || isCustomAttackPackageKindName(kind);
 }
 
 export function isAttackPackageEvent(event: AttackEvent | undefined): event is AttackPackageEvent {
   return Boolean(event && isAttackPackageKind(event.kind));
+}
+
+function normalizeCustomPackageDefinition(rawDefinition: unknown): CustomPackageDefinition {
+  const definition = requireRecord(rawDefinition, "Package definition");
+  const kind = readRequiredString(definition, "kind");
+
+  if (!isCustomAttackPackageKindName(kind)) {
+    throw new Error("Custom package kind must start with custom_ and contain only lowercase letters, numbers, and underscores.");
+  }
+
+  const label = readRequiredString(definition, "label");
+  const build = definition.build;
+
+  if (typeof build !== "function") {
+    throw new Error(`Custom package ${kind} must export a build(context) function.`);
+  }
+
+  const fields = Array.isArray(definition.fields)
+    ? definition.fields.map((rawField) => normalizeCustomPackageField(rawField, kind))
+    : [];
+
+  return {
+    kind,
+    label,
+    description: readOptionalString(definition, "description"),
+    color: normalizeColor(definition.color, 0xff2f4f),
+    icon: readOptionalString(definition, "icon"),
+    fields,
+    defaults: typeof definition.defaults === "function" ? definition.defaults as CustomPackageDefinition["defaults"] : undefined,
+    build: build as CustomPackageDefinition["build"],
+    getDuration: typeof definition.getDuration === "function" ? definition.getDuration as CustomPackageDefinition["getDuration"] : undefined,
+  };
+}
+
+function normalizeCustomPackageField(rawField: unknown, kind: CustomAttackPackageKind): PackageFieldConfig {
+  const fieldDefinition = requireRecord(rawField, "Package field");
+  const name = readRequiredString(fieldDefinition, "name");
+
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    throw new Error(`Custom package field "${name}" must be a valid JavaScript identifier.`);
+  }
+
+  if (["id", "kind", "packageType", "generatedEventIds", "packageId", "packageLocked"].includes(name)) {
+    throw new Error(`Custom package field "${name}" is reserved.`);
+  }
+
+  const type = fieldDefinition.type === "select" || fieldDefinition.type === "checkbox" ? fieldDefinition.type : "number";
+  const config: PackageFieldConfig = {
+    name,
+    label: readOptionalString(fieldDefinition, "label") ?? name,
+    description: readOptionalString(fieldDefinition, "description"),
+    type,
+    packages: [kind],
+  };
+
+  if (type === "select") {
+    config.options = normalizeSelectOptions(fieldDefinition.options);
+  } else if (type === "number") {
+    config.min = normalizeFiniteNumber(fieldDefinition.min, 0);
+    config.max = normalizeFiniteNumber(fieldDefinition.max, 9999);
+    config.step = normalizePositiveNumber(fieldDefinition.step, 1);
+    config.integer = Boolean(fieldDefinition.integer);
+  }
+
+  return config;
+}
+
+function normalizeSelectOptions(rawOptions: unknown): Array<{ value: string; label: string }> {
+  if (!Array.isArray(rawOptions) || rawOptions.length === 0) {
+    throw new Error("Select package fields require at least one option.");
+  }
+
+  return rawOptions.map((rawOption) => {
+    const option = requireRecord(rawOption, "Select option");
+    const value = readRequiredString(option, "value");
+
+    return {
+      value,
+      label: readOptionalString(option, "label") ?? value,
+    };
+  });
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function readRequiredString(source: Record<string, unknown>, name: string): string {
+  const value = source[name];
+
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`${name} must be a non-empty string.`);
+  }
+
+  return value.trim();
+}
+
+function readOptionalString(source: Record<string, unknown>, name: string): string | undefined {
+  const value = source[name];
+
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+}
+
+function normalizeFiniteNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function normalizePositiveNumber(value: unknown, fallback: number): number {
+  const normalized = normalizeFiniteNumber(value, fallback);
+
+  return normalized > 0 ? normalized : fallback;
+}
+
+function normalizeColor(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.round(clamp(value, 0, 0xffffff));
 }
 
 export function createAttackPackageEvent(kind: AttackPackageKind, startTime: number, stage: StageSize): AttackPackageEvent {
@@ -326,16 +546,47 @@ export function createAttackPackageEvent(kind: AttackPackageKind, startTime: num
     packagePolynomialD: 0,
   };
 
-  applyPackageDefaults(base, stage);
+  if (isBuiltInPackageKind(kind)) {
+    applyPackageDefaults(base, stage);
+  } else {
+    applyCustomPackageDefaults(base, stage);
+  }
+
   base.duration = getPackageDuration(base);
   return base;
 }
 
 export function getPackageFieldConfigs(event: AttackPackageEvent): PackageFieldConfig[] {
+  const customDefinition = customPackageDefinitions.get(event.kind as CustomAttackPackageKind);
+
+  if (customDefinition) {
+    const commonFields = [
+      field("startTime", "startTime", [event.kind], 0, 999, 0.1),
+      field("seed", "seed", [event.kind], 1, 999999, 1, true),
+    ];
+    const fields = [...commonFields.slice(0, 1), ...customDefinition.fields, commonFields[1]];
+    const seen = new Set<string>();
+
+    return fields.filter((config) => {
+      if (seen.has(config.name)) {
+        return false;
+      }
+
+      seen.add(config.name);
+      return true;
+    });
+  }
+
   return packageFieldConfigs.filter((config) => config.packages.includes(event.kind));
 }
 
 export function getPackageKindLabel(kind: AttackPackageKind): string {
+  const customDefinition = customPackageDefinitions.get(kind as CustomAttackPackageKind);
+
+  if (customDefinition) {
+    return customDefinition.label;
+  }
+
   switch (kind) {
     case "package_random_barrage":
       return "定点ランダム弾幕";
@@ -365,11 +616,13 @@ export function getPackageKindLabel(kind: AttackPackageKind): string {
       return "中央回転レーザー";
     case "package_sequential_lasers":
       return "時間差平行レーザー";
+    default:
+      return kind;
   }
 }
 
 export function createGeneratedEventsForPackage(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[] {
-  const events = buildPackageEvents(pkg, stage);
+  const events = buildPackageEvents(pkg, stage).map((event, index) => normalizeGeneratedPackageEvent(pkg, event, index));
 
   for (const event of events) {
     event.packageId = pkg.id;
@@ -379,8 +632,25 @@ export function createGeneratedEventsForPackage(pkg: AttackPackageEvent, stage: 
   }
 
   pkg.generatedEventIds = events.map((event) => event.id);
-  pkg.duration = Math.max(getPackageDuration(pkg), getGeneratedDuration(pkg, events));
+  pkg.duration = Math.max(getPackageDuration(pkg, events), getGeneratedDuration(pkg, events));
   return events;
+}
+
+function normalizeGeneratedPackageEvent(pkg: AttackPackageEvent, event: AttackEvent, index: number): AttackEvent {
+  if (!event || typeof event !== "object" || typeof event.kind !== "string") {
+    throw new Error(`Package ${pkg.kind} returned an invalid generated event at index ${index}.`);
+  }
+
+  if (isAttackPackageKind(event.kind)) {
+    throw new Error(`Package ${pkg.kind} cannot generate another package event.`);
+  }
+
+  event.id = typeof event.id === "string" && event.id ? event.id : `${pkg.id}_custom_${index}`;
+  event.name = typeof event.name === "string" && event.name ? event.name : `${pkg.name} ${index + 1}`;
+  event.startTime = Number.isFinite(event.startTime) ? Number(event.startTime.toFixed(2)) : pkg.startTime;
+  event.duration = Number.isFinite(event.duration) && event.duration > 0 ? event.duration : Math.max(0.05, pkg.packageDuration);
+  event.color = Number.isFinite(event.color) ? event.color : pkg.color;
+  return event;
 }
 
 function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
@@ -393,12 +663,13 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
       pkg.packageDuration = 3.2;
       break;
     case "package_repeating_lasers":
+      pkg.packageOrientation = "horizontal";
       pkg.packageCount = 5;
       pkg.packageInterval = 0.48;
       pkg.packageThickness = 22;
       pkg.packageLength = getStraightLaserLength(stage, pkg.packageOrientation);
       pkg.packageDuration = 0.72;
-      pkg.packageOrientation = "horizontal";
+      pkg.packageInitialPosition = stage.height / 2;
       break;
     case "package_bomb_burst":
       pkg.packageBulletCount = 20;
@@ -413,6 +684,10 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
     case "package_random_circle":
       pkg.packageCount = 3;
       pkg.packageInterval = 0.55;
+      pkg.packageX = stage.width / 2;
+      pkg.packageY = stage.height / 2;
+      pkg.packageWidth = stage.width;
+      pkg.packageHeight = stage.height;
       pkg.packageSize = 140;
       pkg.packageDuration = 1.2;
       pkg.packageWarningTime = 0.8;
@@ -421,6 +696,8 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
     case "package_grid_square":
       pkg.packageCount = 4;
       pkg.packageInterval = 0.45;
+      pkg.packageX = stage.width / 2;
+      pkg.packageY = stage.height / 2;
       pkg.packageSize = 96;
       pkg.packageWidth = stage.width;
       pkg.packageHeight = stage.height;
@@ -449,6 +726,10 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
       break;
     case "package_random_lasers":
       pkg.packageCount = 5;
+      pkg.packageX = stage.width / 2;
+      pkg.packageY = stage.height / 2;
+      pkg.packageWidth = stage.width * 0.7;
+      pkg.packageHeight = stage.height * 0.7;
       pkg.packageThickness = 18;
       pkg.packageLength = Math.hypot(stage.width, stage.height) * 2.25;
       pkg.packageDuration = 1;
@@ -457,6 +738,8 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
       break;
     case "package_center_lasers":
       pkg.packageCount = 10;
+      pkg.packageX = stage.width / 2;
+      pkg.packageY = stage.height / 2;
       pkg.packageStartAngle = 0;
       pkg.packageThickness = 16;
       pkg.packageLength = Math.hypot(stage.width, stage.height) * 2.25;
@@ -480,7 +763,7 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
       pkg.packagePolynomialB = 0.3;
       break;
     case "package_enter_exit_bar":
-      pkg.packageLength = stage.width;
+      pkg.packageLength = 960;
       pkg.packageThickness = 28;
       pkg.packageSpeed = 310;
       pkg.packageDuration = 3.2;
@@ -489,6 +772,8 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
       break;
     case "package_rotating_lasers":
       pkg.packageCount = 8;
+      pkg.packageX = stage.width / 2;
+      pkg.packageY = stage.height / 2;
       pkg.packageStartAngle = 0;
       pkg.packageLength = Math.hypot(stage.width, stage.height) * 1.35;
       pkg.packageThickness = 15;
@@ -508,6 +793,23 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
       pkg.packageWarningAlpha = 0.2;
       pkg.packageInitialPosition = stage.height * 0.2;
       break;
+  }
+}
+
+function applyCustomPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
+  const definition = customPackageDefinitions.get(pkg.kind as CustomAttackPackageKind);
+
+  if (!definition?.defaults) {
+    return;
+  }
+
+  const defaults = definition.defaults({
+    stage,
+    helpers: createCustomPackageStaticHelpers(),
+  });
+
+  if (defaults && typeof defaults === "object" && !Array.isArray(defaults)) {
+    Object.assign(pkg, defaults);
   }
 }
 
@@ -542,6 +844,18 @@ function buildPackageEvents(pkg: AttackPackageEvent, stage: StageSize): AttackEv
     case "package_sequential_lasers":
       return buildSequentialLasers(pkg, stage);
   }
+
+  const customDefinition = customPackageDefinitions.get(pkg.kind as CustomAttackPackageKind);
+
+  if (customDefinition) {
+    return customDefinition.build({
+      pkg,
+      stage,
+      helpers: createCustomPackageBuildHelpers(stage),
+    });
+  }
+
+  return [];
 }
 
 function buildRandomBarrage(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[] {
@@ -572,11 +886,15 @@ function buildRepeatingLasers(pkg: AttackPackageEvent, stage: StageSize): Attack
   const events: AttackEvent[] = [];
   const count = Math.max(1, Math.round(pkg.packageCount));
   const length = Math.max(20, pkg.packageLength);
+  const axisMax = pkg.packageOrientation === "horizontal" ? stage.height : stage.width;
+  const defaultCenter = axisMax / 2;
+  const center = pkg.packageInitialPosition >= 0 && pkg.packageInitialPosition <= axisMax ? pkg.packageInitialPosition : defaultCenter;
+  const randomSpan = axisMax * 0.76;
+  const minPosition = clamp(center - randomSpan / 2, 0, axisMax);
+  const maxPosition = clamp(center + randomSpan / 2, minPosition + 1, axisMax);
 
   for (let index = 0; index < count; index += 1) {
-    const position = pkg.packageOrientation === "horizontal"
-      ? randomRange(pkg.seed + index * 37, stage.height * 0.12, stage.height * 0.88)
-      : randomRange(pkg.seed + index * 37, stage.width * 0.12, stage.width * 0.88);
+    const position = randomRange(pkg.seed + index * 37, minPosition, maxPosition);
     const start = pkg.startTime + index * pkg.packageInterval;
 
     events.push(makeLaserWarning(pkg, stage, index, start - pkg.packageWarningTime, position, pkg.packageOrientation, length));
@@ -627,11 +945,12 @@ function buildBombBurst(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[
 function buildRandomCircle(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[] {
   const events: AttackEvent[] = [];
   const count = Math.max(1, Math.round(pkg.packageCount));
+  const area = getPackageAreaBounds(pkg, stage);
 
   for (let index = 0; index < count; index += 1) {
     const start = pkg.startTime + index * pkg.packageInterval;
-    const x = randomRange(pkg.seed + 5 + index * 17, 0, stage.width);
-    const y = randomRange(pkg.seed + 9 + index * 23, 0, stage.height);
+    const x = randomRange(pkg.seed + 5 + index * 17, area.minX, area.maxX);
+    const y = randomRange(pkg.seed + 9 + index * 23, area.minY, area.maxY);
     const warning = createAttackEvent("warningZone", Math.max(0, start - pkg.packageWarningTime), stage) as WarningZoneEvent;
     const block = createAttackEvent("movingBlock", start, stage) as MovingBlockEvent;
 
@@ -670,8 +989,9 @@ function buildRandomCircle(pkg: AttackPackageEvent, stage: StageSize): AttackEve
 function buildGridSquare(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[] {
   const events: AttackEvent[] = [];
   const size = Math.max(8, pkg.packageSize);
-  const columns = Math.max(1, Math.ceil(stage.width / size) + 1);
-  const rows = Math.max(1, Math.ceil(stage.height / size) + 1);
+  const area = getPackageAreaBounds(pkg, stage);
+  const columns = Math.max(1, Math.ceil((area.maxX - area.minX) / size) + 1);
+  const rows = Math.max(1, Math.ceil((area.maxY - area.minY) / size) + 1);
   const count = Math.max(1, Math.round(pkg.packageCount));
 
   for (let index = 0; index < count; index += 1) {
@@ -679,8 +999,8 @@ function buildGridSquare(pkg: AttackPackageEvent, stage: StageSize): AttackEvent
     const cell = Math.floor(randomRange(pkg.seed + 23 + index * 31, 0, columns * rows - 0.001));
     const col = cell % columns;
     const row = Math.floor(cell / columns);
-    const x = col * size;
-    const y = row * size;
+    const x = clamp(area.minX + col * size, 0, stage.width);
+    const y = clamp(area.minY + row * size, 0, stage.height);
     const warning = createAttackEvent("warningZone", Math.max(0, start - pkg.packageWarningTime), stage) as WarningZoneEvent;
     const block = createAttackEvent("movingBlock", start, stage) as MovingBlockEvent;
 
@@ -818,11 +1138,12 @@ function buildRandomLasers(pkg: AttackPackageEvent, stage: StageSize): AttackEve
   const events: AttackEvent[] = [];
   const count = Math.max(1, Math.round(pkg.packageCount));
   const length = Math.max(20, pkg.packageLength);
+  const area = getPackageAreaBounds(pkg, stage);
 
   for (let index = 0; index < count; index += 1) {
     const angle = randomRange(pkg.seed + index * 29, -180, 180);
-    const x = randomRange(pkg.seed + index * 31, stage.width * 0.15, stage.width * 0.85);
-    const y = randomRange(pkg.seed + index * 43, stage.height * 0.15, stage.height * 0.85);
+    const x = randomRange(pkg.seed + index * 31, area.minX, area.maxX);
+    const y = randomRange(pkg.seed + index * 43, area.minY, area.maxY);
 
     events.push(makeAngledLaserWarning(pkg, stage, index, pkg.startTime - pkg.packageWarningTime, x, y, angle, length));
     events.push(makeAngledLaserBullet(pkg, stage, index, pkg.startTime, x, y, angle, 0, length));
@@ -835,12 +1156,14 @@ function buildCenterLasers(pkg: AttackPackageEvent, stage: StageSize): AttackEve
   const events: AttackEvent[] = [];
   const count = Math.max(1, Math.round(pkg.packageCount));
   const length = Math.max(20, pkg.packageLength);
+  const x = pkg.packageX;
+  const y = pkg.packageY;
 
   for (let index = 0; index < count; index += 1) {
     const angle = pkg.packageStartAngle + (360 / count) * index;
 
-    events.push(makeAngledLaserWarning(pkg, stage, index, pkg.startTime - pkg.packageWarningTime, stage.width / 2, stage.height / 2, angle, length));
-    events.push(makeAngledLaserBullet(pkg, stage, index, pkg.startTime, stage.width / 2, stage.height / 2, angle, 0, length));
+    events.push(makeAngledLaserWarning(pkg, stage, index, pkg.startTime - pkg.packageWarningTime, x, y, angle, length));
+    events.push(makeAngledLaserBullet(pkg, stage, index, pkg.startTime, x, y, angle, 0, length));
   }
 
   return events;
@@ -918,13 +1241,15 @@ function buildRotatingLasers(pkg: AttackPackageEvent, stage: StageSize): AttackE
   const events: AttackEvent[] = [];
   const count = Math.max(1, Math.round(pkg.packageCount));
   const event = makeSpread(pkg, stage, 0, pkg.startTime, pkg.name);
+  const x = pkg.packageX;
+  const y = pkg.packageY;
 
   for (let index = 0; index < count; index += 1) {
-    events.push(makeAngledLaserWarning(pkg, stage, index, pkg.startTime - pkg.packageWarningTime, stage.width / 2, stage.height / 2, pkg.packageStartAngle + (360 / count) * index, pkg.packageLength));
+    events.push(makeAngledLaserWarning(pkg, stage, index, pkg.startTime - pkg.packageWarningTime, x, y, pkg.packageStartAngle + (360 / count) * index, pkg.packageLength));
   }
 
-  event.originX = stage.width / 2;
-  event.originY = stage.height / 2;
+  event.originX = x;
+  event.originY = y;
   event.clipCount = count;
   event.clipRepeat = 1;
   event.angleStepDeg = 360 / event.clipCount;
@@ -1082,11 +1407,43 @@ function setLaserVisual(event: BulletMotionFields, length: number, thickness: nu
   event.visualAngle = visualAngle;
 }
 
+function createCustomPackageStaticHelpers(): CustomPackageStaticHelpers {
+  return {
+    clamp,
+    random01,
+    randomRange,
+    degreesToRadians,
+  };
+}
+
+function createCustomPackageBuildHelpers(stage: StageSize): CustomPackageBuildHelpers {
+  return {
+    ...createCustomPackageStaticHelpers(),
+    createAttackEvent: (kind, startTime) => createAttackEvent(kind, startTime, stage),
+    setBulletVisual,
+    setLaserVisual,
+  };
+}
+
 function getStraightLaserLength(stage: StageSize, orientation: "horizontal" | "vertical"): number {
   return orientation === "horizontal" ? stage.width : stage.height;
 }
 
-function getPackageDuration(pkg: AttackPackageEvent): number {
+function getPackageDuration(pkg: AttackPackageEvent, generatedEvents: AttackEvent[] = []): number {
+  const customDefinition = customPackageDefinitions.get(pkg.kind as CustomAttackPackageKind);
+
+  if (customDefinition?.getDuration) {
+    const duration = customDefinition.getDuration({ pkg, generatedEvents });
+
+    if (Number.isFinite(duration) && duration > 0) {
+      return duration;
+    }
+  }
+
+  if (customDefinition || isCustomAttackPackageKindName(pkg.kind)) {
+    return Number.isFinite(pkg.duration) && pkg.duration > 0 ? pkg.duration : Math.max(0.05, pkg.packageDuration);
+  }
+
   const countLikeDuration = pkg.packageDuration + Math.max(0, Math.round(pkg.packageCount) - 1) * Math.max(0, pkg.packageInterval);
 
   switch (pkg.kind) {
@@ -1112,7 +1469,13 @@ function getGeneratedDuration(pkg: AttackPackageEvent, events: AttackEvent[]): n
 }
 
 function getPackageColor(kind: AttackPackageKind): number {
-  const palette: Record<AttackPackageKind, number> = {
+  const customDefinition = customPackageDefinitions.get(kind as CustomAttackPackageKind);
+
+  if (customDefinition) {
+    return customDefinition.color;
+  }
+
+  const palette: Record<BuiltInAttackPackageKind, number> = {
     package_random_barrage: 0xff2f4f,
     package_repeating_lasers: 0x36f5ff,
     package_bomb_burst: 0xffd166,
@@ -1129,7 +1492,7 @@ function getPackageColor(kind: AttackPackageKind): number {
     package_sequential_lasers: 0x36f5ff,
   };
 
-  return palette[kind];
+  return isBuiltInPackageKind(kind) ? palette[kind] : 0xff2f4f;
 }
 
 function random01(seed: number): number {
@@ -1139,6 +1502,26 @@ function random01(seed: number): number {
 
 function randomRange(seed: number, min: number, max: number): number {
   return min + random01(seed) * (max - min);
+}
+
+function getPackageAreaBounds(pkg: AttackPackageEvent, stage: StageSize): { minX: number; maxX: number; minY: number; maxY: number } {
+  const width = Math.max(1, Math.abs(pkg.packageWidth || stage.width));
+  const height = Math.max(1, Math.abs(pkg.packageHeight || stage.height));
+  const minX = clamp(pkg.packageX - width / 2, 0, stage.width);
+  const maxX = clamp(pkg.packageX + width / 2, 0, stage.width);
+  const minY = clamp(pkg.packageY - height / 2, 0, stage.height);
+  const maxY = clamp(pkg.packageY + height / 2, 0, stage.height);
+
+  return {
+    minX: Math.min(minX, maxX),
+    maxX: Math.max(minX, maxX),
+    minY: Math.min(minY, maxY),
+    maxY: Math.max(minY, maxY),
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function radialEndpoint(originX: number, originY: number, angleDegrees: number, speed: number, duration: number): { x: number; y: number } {

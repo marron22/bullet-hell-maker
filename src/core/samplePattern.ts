@@ -100,7 +100,7 @@ export function createStarterPattern(): BulletPattern {
   addPackage(events, "package_enter_exit_bar", 16.9, "入退場バー", 1, {
     packageX: starterStage.width / 2,
     packageY: starterStage.height * 0.72,
-    packageLength: starterStage.width * 0.72,
+    packageLength: 960,
     packageThickness: 26,
     packageSpeed: 330,
     packageDuration: 2.5,

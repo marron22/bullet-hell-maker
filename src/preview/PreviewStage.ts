@@ -10,6 +10,8 @@ interface PreviewRenderState {
   editEventId?: string | null;
   trajectories?: TrajectoryRender[];
   playerAlpha?: number;
+  packageHandles?: PackageHandleRender[];
+  activePackageHandleId?: string | null;
 }
 
 interface TrajectoryRender {
@@ -17,6 +19,16 @@ interface TrajectoryRender {
   color: number;
   alpha: number;
 }
+
+export interface PackageHandleRender {
+  id: string;
+  x: number;
+  y: number;
+  color: number;
+  secondary?: boolean;
+}
+
+type PackageHandleDragPhase = "start" | "move" | "end";
 
 export class PreviewStage {
   private readonly app = new Application();
@@ -31,6 +43,10 @@ export class PreviewStage {
   private shakeUntil = 0;
   private hitEffectUntil = 0;
   private hitEffectPosition: { x: number; y: number };
+  private packageHandles: PackageHandleRender[] = [];
+  private activePackageHandleId: string | null = null;
+  private draggingPackageHandleId: string | null = null;
+  private packageHandleDragCallback?: (handleId: string, point: { x: number; y: number }, phase: PackageHandleDragPhase) => void;
 
   constructor(private readonly stageSize: StageSize) {
     this.playerPosition = {
@@ -51,31 +67,73 @@ export class PreviewStage {
     });
 
     this.app.canvas.className = "preview-canvas";
+    this.app.canvas.style.touchAction = "none";
     parent.appendChild(this.app.canvas);
 
     this.app.stage.addChild(this.backgroundLayer);
-    this.app.stage.addChild(this.eventLayer);
     this.app.stage.addChild(this.trajectoryLayer);
     this.app.stage.addChild(this.attackLayer);
+    this.app.stage.addChild(this.eventLayer);
     this.app.stage.addChild(this.hitEffectLayer);
     this.app.stage.addChild(this.playerLayer);
 
     this.drawBackground();
+    this.app.canvas.addEventListener("pointerdown", (event) => {
+      const point = this.getCanvasStagePoint(event);
+      const handle = this.findPackageHandleAt(point);
+
+      if (!handle) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      this.draggingPackageHandleId = handle.id;
+      this.activePackageHandleId = handle.id;
+      this.app.canvas.setPointerCapture(event.pointerId);
+      this.packageHandleDragCallback?.(handle.id, point, "start");
+    });
+
     this.app.canvas.addEventListener("pointermove", (event) => {
+      const point = this.getCanvasStagePoint(event);
+
+      if (this.draggingPackageHandleId) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.packageHandleDragCallback?.(this.draggingPackageHandleId, point, "move");
+        return;
+      }
+
       if (!this.pointerControlEnabled) {
         return;
       }
 
-      const bounds = this.app.canvas.getBoundingClientRect();
-      const x = ((event.clientX - bounds.left) / bounds.width) * this.stageSize.width;
-      const y = ((event.clientY - bounds.top) / bounds.height) * this.stageSize.height;
-
       this.playerPosition = {
-        x: clamp(x, 0, this.stageSize.width),
-        y: clamp(y, 0, this.stageSize.height),
+        x: clamp(point.x, 0, this.stageSize.width),
+        y: clamp(point.y, 0, this.stageSize.height),
       };
     });
 
+    const stopHandleDrag = (event: PointerEvent) => {
+      if (!this.draggingPackageHandleId) {
+        return;
+      }
+
+      const handleId = this.draggingPackageHandleId;
+      const point = this.getCanvasStagePoint(event);
+
+      event.preventDefault();
+      event.stopPropagation();
+      this.packageHandleDragCallback?.(handleId, point, "end");
+      this.draggingPackageHandleId = null;
+
+      if (this.app.canvas.hasPointerCapture(event.pointerId)) {
+        this.app.canvas.releasePointerCapture(event.pointerId);
+      }
+    };
+
+    this.app.canvas.addEventListener("pointerup", stopHandleDrag);
+    this.app.canvas.addEventListener("pointercancel", stopHandleDrag);
   }
 
   onTick(callback: (deltaSeconds: number) => void): void {
@@ -94,6 +152,10 @@ export class PreviewStage {
 
   setPointerControlEnabled(enabled: boolean): void {
     this.pointerControlEnabled = enabled;
+  }
+
+  setPackageHandleDragCallback(callback: (handleId: string, point: { x: number; y: number }, phase: PackageHandleDragPhase) => void): void {
+    this.packageHandleDragCallback = callback;
   }
 
   setPlayerPosition(x: number, y: number): void {
@@ -124,6 +186,8 @@ export class PreviewStage {
 
   render(state: PreviewRenderState): void {
     this.applyShake();
+    this.packageHandles = state.packageHandles ?? [];
+    this.activePackageHandleId = this.draggingPackageHandleId ?? state.activePackageHandleId ?? null;
     this.drawEvents(state.events, state.currentTime, state.selectedEventId ?? null, state.editEventId ?? null);
     this.drawTrajectories(state.trajectories ?? []);
     this.drawAttackFrame(state.frame);
@@ -160,6 +224,30 @@ export class PreviewStage {
     void selectedEventId;
     void editEventId;
     this.eventLayer.clear();
+
+    for (const handle of this.packageHandles) {
+      this.drawPackageHandle(handle);
+    }
+  }
+
+  private drawPackageHandle(handle: PackageHandleRender): void {
+    const active = handle.id === this.activePackageHandleId;
+    const radius = active ? 14 : 12;
+    const lineAlpha = active ? 0.96 : 0.72;
+    const fillAlpha = handle.secondary ? 0.72 : 0.92;
+
+    this.eventLayer.circle(handle.x, handle.y, radius + 5).stroke({ width: 2, color: 0xffffff, alpha: active ? 0.34 : 0.18 });
+    this.eventLayer.circle(handle.x, handle.y, radius).fill({ color: handle.color, alpha: fillAlpha });
+    this.eventLayer.circle(handle.x, handle.y, radius).stroke({ width: 2, color: 0xffffff, alpha: lineAlpha });
+    this.eventLayer.moveTo(handle.x - radius - 8, handle.y);
+    this.eventLayer.lineTo(handle.x - 4, handle.y);
+    this.eventLayer.moveTo(handle.x + 4, handle.y);
+    this.eventLayer.lineTo(handle.x + radius + 8, handle.y);
+    this.eventLayer.moveTo(handle.x, handle.y - radius - 8);
+    this.eventLayer.lineTo(handle.x, handle.y - 4);
+    this.eventLayer.moveTo(handle.x, handle.y + 4);
+    this.eventLayer.lineTo(handle.x, handle.y + radius + 8);
+    this.eventLayer.stroke({ width: active ? 2 : 1.5, color: 0xffffff, alpha: lineAlpha });
   }
 
   private drawTrajectories(trajectories: TrajectoryRender[]): void {
@@ -289,6 +377,36 @@ export class PreviewStage {
       color: bullet.color,
       alpha: bullet.alpha,
     });
+  }
+
+  private getCanvasStagePoint(event: PointerEvent): { x: number; y: number } {
+    const bounds = this.app.canvas.getBoundingClientRect();
+    const x = ((event.clientX - bounds.left) / Math.max(1, bounds.width)) * this.stageSize.width;
+    const y = ((event.clientY - bounds.top) / Math.max(1, bounds.height)) * this.stageSize.height;
+
+    return {
+      x: clamp(x, 0, this.stageSize.width),
+      y: clamp(y, 0, this.stageSize.height),
+    };
+  }
+
+  private findPackageHandleAt(point: { x: number; y: number }): PackageHandleRender | undefined {
+    const hitRadius = 24;
+    let nearestHandle: PackageHandleRender | undefined;
+    let nearestDistanceSq = hitRadius * hitRadius;
+
+    for (const handle of this.packageHandles) {
+      const dx = handle.x - point.x;
+      const dy = handle.y - point.y;
+      const distanceSq = dx * dx + dy * dy;
+
+      if (distanceSq <= nearestDistanceSq) {
+        nearestDistanceSq = distanceSq;
+        nearestHandle = handle;
+      }
+    }
+
+    return nearestHandle;
   }
 
   private drawHazard(hazard: HazardRender): void {

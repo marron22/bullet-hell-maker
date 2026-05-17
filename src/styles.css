@@ -253,6 +253,10 @@ button:disabled {
   gap: 4px;
 }
 
+.package-menu-items {
+  display: contents;
+}
+
 .menu-item {
   align-items: center;
   background: transparent;
@@ -284,6 +288,16 @@ button:disabled {
 .menu-item[data-add-kind="laserBeam"],
 .menu-item[data-add-kind="rotatingShape"] {
   display: none;
+}
+
+.package-warning {
+  border: 1px solid #775f24;
+  border-radius: 4px;
+  color: #f0d28a;
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 0 0 8px;
+  padding: 7px 9px;
 }
 
 .time-display {

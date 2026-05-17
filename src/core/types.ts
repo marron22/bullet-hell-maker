@@ -21,7 +21,7 @@ export type NormalAttackEventKind =
   | "laserBeam"
   | "rotatingShape";
 
-export type AttackPackageKind =
+export type BuiltInAttackPackageKind =
   | "package_random_barrage"
   | "package_repeating_lasers"
   | "package_bomb_burst"
@@ -36,6 +36,10 @@ export type AttackPackageKind =
   | "package_enter_exit_bar"
   | "package_rotating_lasers"
   | "package_sequential_lasers";
+
+export type CustomAttackPackageKind = `custom_${string}`;
+
+export type AttackPackageKind = BuiltInAttackPackageKind | CustomAttackPackageKind;
 
 export type AttackEventKind = NormalAttackEventKind | AttackPackageKind;
 
@@ -65,6 +69,7 @@ export interface BaseAttackEvent {
 }
 
 export interface AttackPackageEvent extends BaseAttackEvent {
+  [field: string]: unknown;
   kind: AttackPackageKind;
   packageType: AttackPackageKind;
   seed: number;
