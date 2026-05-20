@@ -1011,8 +1011,8 @@ function buildGridSquare(pkg: AttackPackageEvent, stage: StageSize): AttackEvent
     const cell = Math.floor(randomRange(pkg.seed + 23 + index * 31, 0, columns * rows - 0.001));
     const col = cell % columns;
     const row = Math.floor(cell / columns);
-    const x = clamp(area.minX + col * size, 0, stage.width);
-    const y = clamp(area.minY + row * size, 0, stage.height);
+    const x = area.minX + col * size;
+    const y = area.minY + row * size;
     const warning = createAttackEvent("warningZone", Math.max(0, start - pkg.packageWarningTime), stage) as WarningZoneEvent;
     const block = createAttackEvent("movingBlock", start, stage) as MovingBlockEvent;
 
@@ -1519,10 +1519,10 @@ function randomRange(seed: number, min: number, max: number): number {
 function getPackageAreaBounds(pkg: AttackPackageEvent, stage: StageSize): { minX: number; maxX: number; minY: number; maxY: number } {
   const width = Math.max(1, Math.abs(pkg.packageWidth || stage.width));
   const height = Math.max(1, Math.abs(pkg.packageHeight || stage.height));
-  const minX = clamp(pkg.packageX - width / 2, 0, stage.width);
-  const maxX = clamp(pkg.packageX + width / 2, 0, stage.width);
-  const minY = clamp(pkg.packageY - height / 2, 0, stage.height);
-  const maxY = clamp(pkg.packageY + height / 2, 0, stage.height);
+  const minX = pkg.packageX - width / 2;
+  const maxX = pkg.packageX + width / 2;
+  const minY = pkg.packageY - height / 2;
+  const maxY = pkg.packageY + height / 2;
 
   return {
     minX: Math.min(minX, maxX),
