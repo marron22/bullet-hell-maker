@@ -43,6 +43,7 @@ type ProjectPatternFile = Partial<BulletPattern> & {
   customPackages?: ProjectCustomPackageAsset[];
 };
 
+const appVersion = "v0.5";
 let pattern = createStarterPattern();
 const clock = new PlaybackClock();
 let selectedEventId: string | null = pattern.events[0]?.id ?? null;
@@ -434,7 +435,7 @@ appRoot.innerHTML = `
   <div class="app-shell">
     <header class="toolbar">
       <div class="brand">
-        <div class="brand-title">弾幕メーカー v0.4</div>
+        <div class="brand-title">弾幕メーカー ${appVersion}</div>
       </div>
       <nav class="menu-bar" aria-label="メインメニュー">
         <div class="menu">
