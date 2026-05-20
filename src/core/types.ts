@@ -98,6 +98,7 @@ export interface AttackPackageEvent extends BaseAttackEvent {
   packageSplitSpeed: number;
   packageSplitStartAngle: number;
   packageDirectionDeg: number;
+  packageMoveDirectionDeg: number;
   packageDistance: number;
   packageRotationSpeed: number;
   packageWarningTime: number;

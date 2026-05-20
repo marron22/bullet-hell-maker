@@ -2837,6 +2837,7 @@ function getPropertyDescription(name: string): string {
       packageSpeed: "生成される弾やバーの移動速度です。",
       packageSplitSpeed: "分裂後に発射された弾の移動速度です。",
       packageDirectionDeg: "エリア平行弾の発射方向です。0で右向き、90で下向きです。",
+      packageMoveDirectionDeg: "入退場バーの移動方向です。0で右向き、90で下向きです。",
       packageDistance: "連続レーザー同士の距離です。",
       packageRotationSpeed: "回転レーザーの回転速度です。",
       packageWarningTime: "本体攻撃の前に表示する予告時間です。",

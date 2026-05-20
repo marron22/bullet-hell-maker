@@ -292,6 +292,9 @@ export const packageFieldConfigs: PackageFieldConfig[] = [
   field("packageDirectionDeg", "direction", [
     "package_area_parallel",
   ], -720, 720, 5),
+  field("packageMoveDirectionDeg", "moveDirection", [
+    "package_enter_exit_bar",
+  ], -720, 720, 5),
   field("packageDistance", "distance", [
     "package_sequential_lasers",
   ], 1, 800, 1),
@@ -545,6 +548,7 @@ export function createAttackPackageEvent(kind: AttackPackageKind, startTime: num
     packageSplitSpeed: 260,
     packageSplitStartAngle: 0,
     packageDirectionDeg: 0,
+    packageMoveDirectionDeg: 0,
     packageDistance: 64,
     packageRotationSpeed: 60,
     packageWarningTime: 0.65,
@@ -778,6 +782,7 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
       pkg.packageLength = 960;
       pkg.packageThickness = 28;
       pkg.packageSpeed = 310;
+      pkg.packageMoveDirectionDeg = getDefaultEnterExitBarDirection(pkg.packageOrientation);
       pkg.packageDuration = 3.2;
       pkg.packageWarningTime = 0.65;
       pkg.packageWarningAlpha = 0.2;
@@ -1230,23 +1235,30 @@ function buildSnakeChain(pkg: AttackPackageEvent, stage: StageSize): AttackEvent
 
 function buildEnterExitBar(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[] {
   const event = makeSpread(pkg, stage, 0, pkg.startTime, pkg.name);
-  const warningPosition = pkg.packageOrientation === "horizontal" ? pkg.packageY : pkg.packageX;
-  const warning = makeLaserWarning(pkg, stage, 0, pkg.startTime - pkg.packageWarningTime, warningPosition, pkg.packageOrientation, pkg.packageLength);
+  const barAngle = pkg.packageOrientation === "horizontal" ? 0 : 90;
+  const moveDirection = Number.isFinite(pkg.packageMoveDirectionDeg)
+    ? pkg.packageMoveDirectionDeg
+    : getDefaultEnterExitBarDirection(pkg.packageOrientation);
+  const warning = makeAngledLaserWarning(pkg, stage, 0, pkg.startTime - pkg.packageWarningTime, pkg.packageX, pkg.packageY, barAngle, pkg.packageLength);
 
   event.clipCount = 1;
   event.clipRepeat = 1;
-  event.baseAngleDeg = pkg.packageOrientation === "horizontal" ? 90 : 0;
+  event.baseAngleDeg = moveDirection;
   event.originX = pkg.packageX;
   event.originY = pkg.packageY;
   event.pathSpeed = pkg.packageSpeed;
   event.duration = pkg.packageDuration;
-  setLaserVisual(event, pkg.packageLength, pkg.packageThickness, pkg.packageOrientation === "horizontal" ? -90 : 90);
+  setLaserVisual(event, pkg.packageLength, pkg.packageThickness, barAngle - moveDirection);
 
   if (pkg.packageWarningTime <= 0) {
     return [event];
   }
 
   return [warning, event];
+}
+
+function getDefaultEnterExitBarDirection(orientation: "horizontal" | "vertical"): number {
+  return orientation === "horizontal" ? 90 : 0;
 }
 
 function buildRotatingLasers(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[] {
