@@ -6,6 +6,7 @@ import {
   createAttackPackageEvent,
   createGeneratedEventsForPackage,
   getAvailablePackageKinds,
+  getCustomPackageKinds,
   getPackageIcon,
   getPackageFieldConfigs,
   getPackageKindLabel,
@@ -14,6 +15,7 @@ import {
   isCustomAttackPackageKindName,
   isMissingCustomPackageDefinition,
   registerCustomPackageDefinition,
+  unregisterCustomPackageDefinition,
   type PackageFieldConfig,
 } from "./core/packages";
 import { createStarterPattern } from "./core/samplePattern";
@@ -452,18 +454,23 @@ appRoot.innerHTML = `
         <div class="menu">
           <button class="menu-button" type="button" data-menu-button="add">追加</button>
           <div class="menu-popover" data-menu="add">
-            <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="single-bullet">${iconSvg("dot")}<span>単発弾</span></button>
-            <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="aimed-3way">${iconSvg("target")}<span>自機狙い3Way</span></button>
-            <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="fan-burst">${iconSvg("fan")}<span>扇状連射</span></button>
-            <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="radial-burst">${iconSvg("circle")}<span>円形バースト</span></button>
-            <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="horizontal-laser">${iconSvg("laser")}<span>水平レーザー</span></button>
-            <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="left-wall">${iconSvg("wall")}<span>左壁スイープ</span></button>
-            <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="orbiting-diamond">${iconSvg("rotate")}<span>回転ダイヤ</span></button>
-            <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="boss-fan">${iconSvg("fan")}<span>ボス扇弾</span></button>
-            <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="polynomial-radial">${iconSvg("curve")}<span>カーブ回転弾</span></button>
-            <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="curved-laser-ring">${iconSvg("burst")}<span>8方向カーブレーザー</span></button>
-            <button id="import-package-button" class="menu-item" type="button">${iconSvg("upload")}<span>コードからパッケージを追加</span></button>
+            <div class="menu-section-label">単発弾</div>
+            <div class="menu-section">
+              <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="single-bullet">${iconSvg("dot")}<span>単発弾</span></button>
+              <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="aimed-3way">${iconSvg("target")}<span>自機狙い3Way</span></button>
+              <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="fan-burst">${iconSvg("fan")}<span>扇状連射</span></button>
+              <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="radial-burst">${iconSvg("circle")}<span>円形バースト</span></button>
+              <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="horizontal-laser">${iconSvg("laser")}<span>水平レーザー</span></button>
+              <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="left-wall">${iconSvg("wall")}<span>左壁スイープ</span></button>
+              <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="orbiting-diamond">${iconSvg("rotate")}<span>回転ダイヤ</span></button>
+              <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="boss-fan">${iconSvg("fan")}<span>ボス扇弾</span></button>
+              <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="polynomial-radial">${iconSvg("curve")}<span>カーブ回転弾</span></button>
+              <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="curved-laser-ring">${iconSvg("burst")}<span>8方向カーブレーザー</span></button>
+            </div>
+            <div class="menu-divider" role="separator"></div>
             <div id="package-menu-items" class="package-menu-items"></div>
+            <div class="menu-divider" role="separator"></div>
+            <button id="import-package-button" class="menu-item" type="button">${iconSvg("upload")}<span>コードからパッケージを追加</span></button>
           </div>
         </div>
       </nav>
@@ -827,6 +834,14 @@ function handleAddMenuClick(event: MouseEvent): void {
   const target = event.target;
 
   if (!(target instanceof Element)) {
+    return;
+  }
+
+  const deleteButton = target.closest<HTMLButtonElement>("[data-delete-package-kind]");
+
+  if (deleteButton && addMenu.contains(deleteButton)) {
+    event.stopPropagation();
+    deleteCustomPackage(deleteButton.dataset.deletePackageKind ?? "");
     return;
   }
 
@@ -1550,6 +1565,27 @@ async function importCustomPackageCode(fileName: string, code: string, expectedK
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+function deleteCustomPackage(kind: string): void {
+  if (!isCustomAttackPackageKindName(kind)) {
+    return;
+  }
+
+  const label = getPackageKindLabel(kind);
+  const usedCount = pattern.events.filter((event) => isAttackPackageEvent(event) && event.kind === kind).length;
+  const message = usedCount > 0
+    ? `${label} を追加メニューから削除します。既存の ${usedCount} 個のパッケージ配置と生成済み攻撃は残りますが、再生成には元の .mjs が必要になります。`
+    : `${label} を追加メニューから削除します。`;
+
+  if (!window.confirm(message)) {
+    return;
+  }
+
+  unregisterCustomPackageDefinition(kind);
+  projectCustomPackageAssets.delete(kind);
+  renderPackageMenu();
+  renderEverything();
 }
 
 function renderPackageMenu(): void {
@@ -2639,9 +2675,43 @@ function renderPackagePanel(): void {
 }
 
 function renderPackageMenuItems(): string {
-  return getAvailablePackageKinds()
-    .map((kind) => `<button class="menu-item package-menu-item" type="button" data-add-kind="${kind}">${iconSvg(getPackageMenuIcon(kind))}<span>${getPackageKindLabel(kind)}</span></button>`)
+  const customKinds = new Set<string>(getCustomPackageKinds());
+  const builtInPackageItems = getAvailablePackageKinds()
+    .filter((kind) => !customKinds.has(kind))
+    .map((kind) => renderBuiltInPackageMenuItem(kind))
     .join("");
+  const customPackageItems = [...customKinds]
+    .map((kind) => renderCustomPackageMenuItem(kind as AttackPackageKind))
+    .join("");
+
+  return `
+    <div class="menu-section-label">その他</div>
+    <div class="menu-section">
+      ${builtInPackageItems}
+    </div>
+    ${customPackageItems ? `
+      <div class="menu-divider" role="separator"></div>
+      <div class="menu-section-label">追加したパッケージ</div>
+      <div class="menu-section">
+        ${customPackageItems}
+      </div>
+    ` : ""}
+  `;
+}
+
+function renderBuiltInPackageMenuItem(kind: AttackPackageKind): string {
+  return `<button class="menu-item package-menu-item" type="button" data-add-kind="${kind}">${iconSvg(getPackageMenuIcon(kind))}<span>${escapeHtml(getPackageKindLabel(kind))}</span></button>`;
+}
+
+function renderCustomPackageMenuItem(kind: AttackPackageKind): string {
+  const label = getPackageKindLabel(kind);
+
+  return `
+    <div class="package-menu-row">
+      <button class="menu-item package-menu-item" type="button" data-add-kind="${kind}">${iconSvg(getPackageMenuIcon(kind))}<span>${escapeHtml(label)}</span></button>
+      <button class="menu-action-button" type="button" data-delete-package-kind="${kind}" title="${escapeHtml(label)}を削除" aria-label="${escapeHtml(label)}を削除">${iconSvg("trash")}</button>
+    </div>
+  `;
 }
 
 function getPackageMenuIcon(kind: AttackPackageKind): string {
@@ -4056,6 +4126,7 @@ function iconSvg(name: string): string {
     lane: '<rect x="4" y="4" width="16" height="16" rx="1"></rect><path d="M9 4v16"></path><path d="M15 4v16"></path>',
     download: '<path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path>',
     upload: '<path d="M12 21V9"></path><path d="m7 14 5-5 5 5"></path><path d="M5 3h14"></path>',
+    trash: '<path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 15H6L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>',
     music: '<path d="M9 18V5l11-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="17" cy="16" r="3"></circle>',
     box: '<path d="M21 8 12 3 3 8l9 5 9-5z"></path><path d="M3 8v8l9 5 9-5V8"></path><path d="M12 13v8"></path>',
     package: '<path d="M16 3h5v5"></path><path d="M8 3H3v5"></path><path d="M3 16v5h5"></path><path d="M21 16v5h-5"></path><rect x="8" y="8" width="8" height="8" rx="1"></rect>',

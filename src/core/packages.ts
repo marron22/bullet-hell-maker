@@ -341,8 +341,20 @@ export function getAvailablePackageKinds(): AttackPackageKind[] {
   return [...packageKinds, ...customPackageDefinitions.keys()];
 }
 
+export function getCustomPackageKinds(): CustomAttackPackageKind[] {
+  return [...customPackageDefinitions.keys()];
+}
+
 export function getCustomPackageDefinition(kind: string): CustomPackageDefinition | undefined {
   return customPackageDefinitions.get(kind as CustomAttackPackageKind);
+}
+
+export function unregisterCustomPackageDefinition(kind: string): boolean {
+  if (!isCustomAttackPackageKindName(kind)) {
+    return false;
+  }
+
+  return customPackageDefinitions.delete(kind);
 }
 
 export function isBuiltInPackageKind(kind: string): kind is BuiltInAttackPackageKind {
