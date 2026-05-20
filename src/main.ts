@@ -3841,6 +3841,7 @@ function pasteCopiedEvent(): void {
     if (isAttackPackageEvent(event)) {
       event.packageId = undefined;
       event.packageLocked = undefined;
+      event.seed = createCopiedPackageSeed(event.seed);
       event.generatedEventIds = [];
       pattern.events.push(event, ...createGeneratedEventsForPackage(event, pattern.stage));
     } else {
@@ -3876,6 +3877,12 @@ function buildCopyStatusText(events: AttackEvent[]): string {
 
 function createCopiedEventId(baseId: string): string {
   return `${baseId}_copy_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function createCopiedPackageSeed(previousSeed: number): number {
+  const seed = Math.floor(1000 + Math.random() * 900000);
+
+  return seed === previousSeed ? ((seed % 999999) + 1) : seed;
 }
 
 function getNextCopiedEventName(name: string, reservedNames: Set<string>): string {
