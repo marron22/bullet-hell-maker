@@ -22,7 +22,7 @@ export default {
   kind: "custom_example_package",
   label: "表示名",
   description: "任意の説明",
-  color: 0xff2f4f,
+  color: 0xf82469,
   icon: "package",
   fields: [],
   defaults({ stage, helpers }) {
@@ -116,7 +116,7 @@ export default {
   kind: "custom_spiral_radial",
   label: "螺旋ラジアル",
   description: "中心から開始角度をずらしながら円形弾を連射します。",
-  color: 0xff2f93,
+  color: 0xf82469,
   icon: "burst",
   fields: [
     { name: "count", label: "count", type: "number", min: 1, max: 64, step: 1, integer: true },

@@ -1,4 +1,5 @@
 import { Application, Assets, Container, Graphics, Sprite, type Texture } from "pixi.js";
+import { defaultAttackColor } from "../core/colors";
 import type { AttackEvent, AttackFrame, BulletRender, CurvedLaserRender, HazardRender, LaserRender, ShapeRender, StageSize } from "../core/types";
 
 interface PreviewRenderState {
@@ -379,9 +380,9 @@ export class PreviewStage {
     const radius = 20 + progress * 90;
     const { x, y } = this.hitEffectPosition;
 
-    this.hitEffectLayer.rect(0, 0, this.stageSize.width, this.stageSize.height).fill({ color: 0xff2f4f, alpha: 0.16 * fade });
+    this.hitEffectLayer.rect(0, 0, this.stageSize.width, this.stageSize.height).fill({ color: defaultAttackColor, alpha: 0.16 * fade });
     this.hitEffectLayer.circle(x, y, radius).stroke({ width: Math.max(2, 7 * fade), color: 0xffffff, alpha: 0.8 * fade });
-    this.hitEffectLayer.circle(x, y, radius * 0.55).stroke({ width: Math.max(1, 4 * fade), color: 0xff2f4f, alpha: 0.9 * fade });
+    this.hitEffectLayer.circle(x, y, radius * 0.55).stroke({ width: Math.max(1, 4 * fade), color: defaultAttackColor, alpha: 0.9 * fade });
   }
 
   private drawBullet(bullet: BulletRender): void {

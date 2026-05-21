@@ -1,3 +1,4 @@
+import { defaultAttackColor } from "./colors";
 import type {
   AttackEvent,
   BulletMotionFields,
@@ -98,7 +99,7 @@ function resetMotion(event: AttackEvent & BulletMotionFields, stage: StageSize):
 function applySingleBullet(event: AttackEvent & BulletMotionFields, stage: StageSize): void {
   event.name = "単発弾";
   event.duration = 4;
-  event.color = 0xff2f4f;
+  event.color = defaultAttackColor;
   event.originX = stage.width / 2;
   event.originY = stage.height * 0.28;
   event.pathSpeed = 260;
@@ -117,7 +118,7 @@ function applySingleBullet(event: AttackEvent & BulletMotionFields, stage: Stage
 function applyAimed3Way(event: AttackEvent & BulletMotionFields & FireClipFields, stage: StageSize): void {
   event.name = "自機狙い3Way";
   event.duration = 3.4;
-  event.color = 0xff2f4f;
+  event.color = defaultAttackColor;
   event.originX = stage.width / 2;
   event.originY = 90;
   event.pathSpeed = 250;
@@ -133,7 +134,7 @@ function applyAimed3Way(event: AttackEvent & BulletMotionFields & FireClipFields
 function applyFanBurst(event: AttackEvent & BulletMotionFields & FireClipFields, stage: StageSize): void {
   event.name = "扇状連射";
   event.duration = 3.8;
-  event.color = 0xff2f93;
+  event.color = defaultAttackColor;
   event.originX = stage.width / 2;
   event.originY = stage.height * 0.3;
   event.pathSpeed = 230;
@@ -149,7 +150,7 @@ function applyFanBurst(event: AttackEvent & BulletMotionFields & FireClipFields,
 function applyRadialBurst(event: AttackEvent & BulletMotionFields & FireClipFields, stage: StageSize): void {
   event.name = "円形バースト";
   event.duration = 3.6;
-  event.color = 0xff2f4f;
+  event.color = defaultAttackColor;
   event.originX = stage.width / 2;
   event.originY = stage.height / 2;
   event.pathSpeed = 190;
@@ -168,7 +169,7 @@ function applyRadialBurst(event: AttackEvent & BulletMotionFields & FireClipFiel
 function applyHorizontalLaser(event: AttackEvent & BulletMotionFields, stage: StageSize): void {
   event.name = "水平レーザー";
   event.duration = 1.5;
-  event.color = 0xff2f4f;
+  event.color = defaultAttackColor;
   event.originX = stage.width / 2;
   event.originY = stage.height / 2;
   event.pathSpeed = 0;
@@ -193,7 +194,7 @@ function applyHorizontalLaser(event: AttackEvent & BulletMotionFields, stage: St
 function applyLeftWall(event: AttackEvent & BulletMotionFields, stage: StageSize): void {
   event.name = "左壁スイープ";
   event.duration = 5;
-  event.color = 0xff2f4f;
+  event.color = defaultAttackColor;
   event.originX = -50;
   event.originY = stage.height / 2;
   event.pathSpeed = 260;
@@ -218,7 +219,7 @@ function applyLeftWall(event: AttackEvent & BulletMotionFields, stage: StageSize
 function applyBossFan(event: AttackEvent & BulletMotionFields & FireClipFields, stage: StageSize): void {
   event.name = "ボス扇弾";
   event.duration = 4.8;
-  event.color = 0x2776ff;
+  event.color = defaultAttackColor;
   event.originX = stage.width / 2;
   event.originY = 96;
   event.pathSpeed = 210;
@@ -237,7 +238,7 @@ function applyBossFan(event: AttackEvent & BulletMotionFields & FireClipFields, 
 function applyPolynomialRadial(event: AttackEvent & BulletMotionFields & FireClipFields, stage: StageSize): void {
   event.name = "カーブ回転弾";
   event.duration = 4;
-  event.color = 0xff365f;
+  event.color = defaultAttackColor;
   event.originX = stage.width / 2;
   event.originY = stage.height / 2;
   event.pathSpeed = 180;
@@ -261,7 +262,7 @@ function applyPolynomialRadial(event: AttackEvent & BulletMotionFields & FireCli
 function applyCurvedLaserRing(event: AttackEvent & BulletMotionFields & FireClipFields, stage: StageSize): void {
   event.name = "8方向カーブレーザー";
   event.duration = 4;
-  event.color = 0xff2f4f;
+  event.color = defaultAttackColor;
   event.originX = stage.width / 2;
   event.originY = stage.height / 2;
   event.pathSpeed = 190;
@@ -288,7 +289,7 @@ function applyCurvedLaserRing(event: AttackEvent & BulletMotionFields & FireClip
 function applyOrbitingDiamond(event: AttackEvent & BulletMotionFields, stage: StageSize): void {
   event.name = "回転ダイヤ";
   event.duration = 4;
-  event.color = 0xffd166;
+  event.color = defaultAttackColor;
   event.originX = stage.width / 2;
   event.originY = stage.height / 2;
   event.pathStartX = 1;

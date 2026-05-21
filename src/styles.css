@@ -1193,7 +1193,7 @@ body.is-resizing-layout {
 }
 
 .timeline-event-range {
-  background: var(--marker-color, #ff2f93);
+  background: var(--marker-color, #f82469);
   border-radius: 999px;
   bottom: auto;
   height: max(8px, calc((100% / var(--timeline-lane-count, 1)) - 12px));
@@ -1221,7 +1221,7 @@ body.is-resizing-layout {
 }
 
 .timeline-marker::before {
-  background: var(--marker-color, #ff2f93);
+  background: var(--marker-color, #f82469);
   border-radius: 999px;
   bottom: 5px;
   content: "";

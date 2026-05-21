@@ -1,3 +1,4 @@
+import { defaultAttackColor } from "./colors";
 import { createAttackEvent } from "./eventFactory";
 import type {
   AttackEvent,
@@ -414,7 +415,7 @@ function normalizeCustomPackageDefinition(rawDefinition: unknown): CustomPackage
     kind,
     label,
     description: readOptionalString(definition, "description"),
-    color: normalizeColor(definition.color, 0xff2f4f),
+    color: normalizeColor(definition.color, defaultAttackColor),
     icon: readOptionalString(definition, "icon"),
     fields,
     defaults: typeof definition.defaults === "function" ? definition.defaults as CustomPackageDefinition["defaults"] : undefined,
@@ -1505,23 +1506,23 @@ function getPackageColor(kind: AttackPackageKind): number {
   }
 
   const palette: Record<BuiltInAttackPackageKind, number> = {
-    package_random_barrage: 0xff2f4f,
-    package_repeating_lasers: 0x36f5ff,
-    package_bomb_burst: 0xffd166,
-    package_random_circle: 0xff2f93,
-    package_grid_square: 0xff4f8f,
-    package_lag_radial: 0xff2f4f,
-    package_split_lag_radial: 0xff2f93,
-    package_random_lasers: 0x36f5ff,
-    package_center_lasers: 0x36f5ff,
-    package_area_parallel: 0xff2f4f,
-    package_snake_chain: 0xffd166,
-    package_enter_exit_bar: 0xff2f4f,
-    package_rotating_lasers: 0x36f5ff,
-    package_sequential_lasers: 0x36f5ff,
+    package_random_barrage: defaultAttackColor,
+    package_repeating_lasers: defaultAttackColor,
+    package_bomb_burst: defaultAttackColor,
+    package_random_circle: defaultAttackColor,
+    package_grid_square: defaultAttackColor,
+    package_lag_radial: defaultAttackColor,
+    package_split_lag_radial: defaultAttackColor,
+    package_random_lasers: defaultAttackColor,
+    package_center_lasers: defaultAttackColor,
+    package_area_parallel: defaultAttackColor,
+    package_snake_chain: defaultAttackColor,
+    package_enter_exit_bar: defaultAttackColor,
+    package_rotating_lasers: defaultAttackColor,
+    package_sequential_lasers: defaultAttackColor,
   };
 
-  return isBuiltInPackageKind(kind) ? palette[kind] : 0xff2f4f;
+  return isBuiltInPackageKind(kind) ? palette[kind] : defaultAttackColor;
 }
 
 function random01(seed: number): number {

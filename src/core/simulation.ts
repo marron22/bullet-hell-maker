@@ -326,7 +326,7 @@ function buildMovingOriginCue(event: FireFromMovingOriginEvent, time: number) {
     radius: event.visualSize * 1.7,
     rotation: degreesToRadians(event.baseAngleDeg),
     sides: 3,
-    color: 0xffffff,
+    color: event.color,
     alpha: 0.6,
   };
 }
