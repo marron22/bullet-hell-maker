@@ -52,7 +52,7 @@ type AiBeatmapDraftFile = {
   events?: unknown[];
 };
 
-const appVersion = "v0.8";
+const appVersion = "v0.9";
 let pattern = createStarterPattern();
 const clock = new PlaybackClock();
 let selectedEventId: string | null = pattern.events[0]?.id ?? null;
@@ -1551,13 +1551,14 @@ async function importAiBeatmap(file: File): Promise<void> {
       pattern.title = parsed.title.trim();
     }
 
+    applyAiBeatmapTimeline(parsed.timeline);
+
     const requestedDuration = Number(parsed.duration);
 
     if (Number.isFinite(requestedDuration) && requestedDuration > 0) {
       pattern.duration = requestedDuration;
     }
 
-    applyAiBeatmapTimeline(parsed.timeline);
     pattern.events = buildAiBeatmapEvents(parsed.events);
     pattern.duration = Math.max(
       1,
@@ -1596,7 +1597,7 @@ function createAiBeatmapPackageEvent(rawEvent: unknown, index: number): AttackPa
   }
 
   const kind = parseAiBeatmapPackageKind(rawEvent.kind, index);
-  const startTime = Number(rawEvent.time);
+  const startTime = parseAiBeatmapEventStartTime(rawEvent, index);
 
   if (!Number.isFinite(startTime) || startTime < 0) {
     throw new Error(`AI beatmap event ${index + 1} has an invalid time.`);
@@ -1626,6 +1627,24 @@ function parseAiBeatmapPackageKind(value: unknown, index: number): AttackPackage
   throw new Error(`AI beatmap event ${index + 1} has an unsupported package kind.`);
 }
 
+function parseAiBeatmapEventStartTime(rawEvent: Record<string, unknown>, index: number): number {
+  const startTime = parseOptionalNumber(rawEvent.time);
+
+  if (startTime !== undefined) {
+    return startTime;
+  }
+
+  const startBeat = parseOptionalNumber(rawEvent.beat)
+    ?? parseOptionalNumber(rawEvent.beats)
+    ?? parseOptionalNumber(rawEvent.startBeat);
+
+  if (startBeat !== undefined) {
+    return Number(beatToSeconds(startBeat).toFixed(4));
+  }
+
+  throw new Error(`AI beatmap event ${index + 1} has no time or beat.`);
+}
+
 function applyAiBeatmapPackageParams(packageEvent: AttackPackageEvent, rawParams: unknown): void {
   if (!isRecord(rawParams)) {
     return;
@@ -1634,11 +1653,13 @@ function applyAiBeatmapPackageParams(packageEvent: AttackPackageEvent, rawParams
   const packageRecord = packageEvent as unknown as Record<string, number | string>;
 
   for (const config of getPackageFieldConfigs(packageEvent)) {
-    if (config.name === "startTime" || !(config.name in rawParams)) {
+    const input = getAiBeatmapPackageParamInput(config, rawParams);
+
+    if (config.name === "startTime" || !input.found) {
       continue;
     }
 
-    const value = rawParams[config.name];
+    const value = input.value;
 
     if (config.type === "select") {
       if (typeof value === "string" && config.options?.some((option) => option.value === value)) {
@@ -1663,6 +1684,30 @@ function applyAiBeatmapPackageParams(packageEvent: AttackPackageEvent, rawParams
     const nextValue = clamp(parsedValue, min, max);
     packageRecord[config.name] = config.integer ? Math.round(nextValue) : nextValue;
   }
+}
+
+function getAiBeatmapPackageParamInput(
+  config: PackageFieldConfig,
+  rawParams: Record<string, unknown>,
+): { found: boolean; value: unknown } {
+  if (config.name in rawParams) {
+    return { found: true, value: rawParams[config.name] };
+  }
+
+  if (config.type === "number" && isBeatDurationPackageField(config.name)) {
+    const beatsValue = parseOptionalNumber(rawParams[`${config.name}Beats`])
+      ?? parseOptionalNumber(rawParams[`${config.name}Beat`]);
+
+    if (beatsValue !== undefined) {
+      return { found: true, value: beatDurationToSeconds(beatsValue) };
+    }
+  }
+
+  return { found: false, value: undefined };
+}
+
+function isBeatDurationPackageField(fieldName: string): boolean {
+  return /(?:Time|Duration|Interval|Spacing)$/u.test(fieldName);
 }
 
 function applyAiBeatmapPackageColor(packageEvent: AttackPackageEvent, value: unknown): void {
@@ -1716,6 +1761,16 @@ function parseJsonWithOptionalFence(text: string): unknown {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseOptionalNumber(value: unknown): number | undefined {
+  if (typeof value !== "number" && (typeof value !== "string" || value.trim() === "")) {
+    return undefined;
+  }
+
+  const parsedValue = Number(value);
+
+  return Number.isFinite(parsedValue) ? parsedValue : undefined;
 }
 
 async function importPackageCodeFile(file: File): Promise<void> {
