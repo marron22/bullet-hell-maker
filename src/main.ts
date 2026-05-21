@@ -52,7 +52,13 @@ type AiBeatmapDraftFile = {
   events?: unknown[];
 };
 
-const appVersion = "v0.9";
+type PreviewEventWindow = {
+  event: AttackEvent;
+  activeStartTime: number;
+  activeEndTime: number;
+};
+
+const appVersion = "v0.10";
 let pattern = createStarterPattern();
 const clock = new PlaybackClock();
 let selectedEventId: string | null = pattern.events[0]?.id ?? null;
@@ -91,6 +97,8 @@ let activeResizeTarget: "timeline" | "inspector" | null = null;
 let suppressNextPlayClick = false;
 let suppressNextResetClick = false;
 let activePackageHandleId: string | null = null;
+let previewEventWindows: PreviewEventWindow[] | null = null;
+let lastPreviewWaveformRenderTime = 0;
 
 const defaultMusicVolume = 0.8;
 const audio = new Audio();
@@ -107,6 +115,8 @@ const maxTimelineContentWidth = 32000;
 const minMeasureInterval = 0.05;
 const maxMeasureInterval = 120;
 const maxHistoryEntries = 100;
+const previewEventTimePadding = 0.04;
+const previewWaveformRenderIntervalMs = 1000 / 12;
 const playerHitSize = 12;
 const previewMoveSpeed = 375;
 const previewDashSpeed = 1120;
@@ -1286,7 +1296,7 @@ preview.onTick((deltaSeconds) => {
   }
 
   renderPreview();
-  renderWaveform();
+  renderWaveformForTick();
   syncUi();
 });
 
@@ -1962,6 +1972,7 @@ function isAttackEventKind(kind: string): kind is AttackEventKind {
 }
 
 function renderEverything(): void {
+  invalidatePreviewRenderCache();
   ensureTimelineSettings();
   ensurePatternEditorFields();
   ensurePackageChildren();
@@ -1978,6 +1989,11 @@ function renderEverything(): void {
   renderWaveform();
   renderPreview();
   syncUi();
+}
+
+function invalidatePreviewRenderCache(): void {
+  previewEventWindows = null;
+  lastPreviewWaveformRenderTime = 0;
 }
 
 function setEditorMode(mode: EditorMode): void {
@@ -2075,7 +2091,7 @@ function ensureEditModeState(): void {
 
 function renderPreview(): void {
   syncTrajectoryModeNotice();
-  const previewEvents = getPreviewEvents();
+  const previewEvents = getPreviewEvents(clock.time);
   const playerPosition = preview.getPlayerPosition();
   const frame = buildAttackFrame(previewEvents, clock.time, pattern.stage, playerPosition);
   const packageHandles = buildPackagePreviewHandles();
@@ -2097,14 +2113,67 @@ function renderPreview(): void {
     playerAlpha: dashTimeRemaining > 0 ? 0.45 : 1,
     packageHandles,
     activePackageHandleId: packageHandles.some((handle) => handle.id === activePackageHandleId) ? activePackageHandleId : null,
+    lightweight: editorMode === "preview",
   });
 }
 
-function getPreviewEvents(): AttackEvent[] {
+function getPreviewEvents(currentTime = clock.time): AttackEvent[] {
   const editingEvent = getEditingEvent();
-  const events = editorMode === "trajectory" ? (editingEvent ? [editingEvent] : []) : pattern.events;
 
-  return events.filter((event) => !isAttackPackageEvent(event) && isEventVisible(event) && isParentPackageVisible(event));
+  if (editorMode === "trajectory") {
+    return editingEvent && isPreviewRenderableEvent(editingEvent) ? [editingEvent] : [];
+  }
+
+  if (editorMode !== "preview") {
+    return pattern.events.filter(isPreviewRenderableEvent);
+  }
+
+  const activeEvents: AttackEvent[] = [];
+
+  for (const entry of getPreviewEventWindows()) {
+    if (entry.activeStartTime > currentTime + previewEventTimePadding) {
+      break;
+    }
+
+    if (entry.activeEndTime >= currentTime - previewEventTimePadding) {
+      activeEvents.push(entry.event);
+    }
+  }
+
+  return activeEvents;
+}
+
+function getPreviewEventWindows(): PreviewEventWindow[] {
+  if (previewEventWindows) {
+    return previewEventWindows;
+  }
+
+  previewEventWindows = pattern.events
+    .filter(isPreviewRenderableEvent)
+    .map((event) => ({
+      event,
+      activeStartTime: getPreviewEventActiveStartTime(event),
+      activeEndTime: getEventEndTime(event),
+    }))
+    .sort((a, b) => a.activeStartTime - b.activeStartTime);
+
+  return previewEventWindows;
+}
+
+function isPreviewRenderableEvent(event: AttackEvent): boolean {
+  return !isAttackPackageEvent(event) && isEventVisible(event) && isParentPackageVisible(event);
+}
+
+function getPreviewEventActiveStartTime(event: AttackEvent): number {
+  return Math.max(0, event.startTime - getEventWarningLeadTime(event));
+}
+
+function getEventWarningLeadTime(event: AttackEvent): number {
+  if ("warningTime" in event && typeof event.warningTime === "number" && Number.isFinite(event.warningTime)) {
+    return Math.max(0, event.warningTime);
+  }
+
+  return 0;
 }
 
 type PackageHandleRole = "source" | "target" | "start" | "area" | "center" | "position";
@@ -3939,6 +4008,22 @@ function renderWaveform(): void {
 
   drawGridOnCanvas(context, width, height);
   drawPlayheadOnCanvas(context, width, height);
+}
+
+function renderWaveformForTick(): void {
+  if (editorMode !== "preview") {
+    renderWaveform();
+    return;
+  }
+
+  const now = performance.now();
+
+  if (now - lastPreviewWaveformRenderTime < previewWaveformRenderIntervalMs) {
+    return;
+  }
+
+  lastPreviewWaveformRenderTime = now;
+  renderWaveform();
 }
 
 function rebuildWaveformPeaksForCanvas(): void {

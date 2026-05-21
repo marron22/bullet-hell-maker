@@ -12,6 +12,7 @@ interface PreviewRenderState {
   playerAlpha?: number;
   packageHandles?: PackageHandleRender[];
   activePackageHandleId?: string | null;
+  lightweight?: boolean;
 }
 
 interface TrajectoryRender {
@@ -46,6 +47,8 @@ export class PreviewStage {
   private packageHandles: PackageHandleRender[] = [];
   private activePackageHandleId: string | null = null;
   private draggingPackageHandleId: string | null = null;
+  private eventLayerHasContent = false;
+  private trajectoryLayerHasContent = false;
   private packageHandleDragCallback?: (handleId: string, point: { x: number; y: number }, phase: PackageHandleDragPhase) => void;
 
   constructor(private readonly stageSize: StageSize) {
@@ -139,11 +142,13 @@ export class PreviewStage {
   onTick(callback: (deltaSeconds: number) => void): void {
     let previousTime = performance.now();
 
-    window.setInterval(() => {
-      const time = performance.now();
-      callback((time - previousTime) / 1000);
+    const tick = (time: number) => {
+      callback(Math.min((time - previousTime) / 1000, 0.1));
       previousTime = time;
-    }, 1000 / 60);
+      window.requestAnimationFrame(tick);
+    };
+
+    window.requestAnimationFrame(tick);
   }
 
   getPlayerPosition(): { x: number; y: number } {
@@ -188,8 +193,18 @@ export class PreviewStage {
     this.applyShake();
     this.packageHandles = state.packageHandles ?? [];
     this.activePackageHandleId = this.draggingPackageHandleId ?? state.activePackageHandleId ?? null;
-    this.drawEvents(state.events, state.currentTime, state.selectedEventId ?? null, state.editEventId ?? null);
-    this.drawTrajectories(state.trajectories ?? []);
+    const trajectories = state.trajectories ?? [];
+
+    if (!state.lightweight || this.packageHandles.length > 0 || this.eventLayerHasContent) {
+      this.drawEvents(state.events, state.currentTime, state.selectedEventId ?? null, state.editEventId ?? null);
+      this.eventLayerHasContent = this.packageHandles.length > 0;
+    }
+
+    if (!state.lightweight || trajectories.length > 0 || this.trajectoryLayerHasContent) {
+      this.drawTrajectories(trajectories);
+      this.trajectoryLayerHasContent = trajectories.length > 0;
+    }
+
     this.drawAttackFrame(state.frame);
     this.drawHitEffect();
     this.drawPlayer(state.playerAlpha ?? 1);
@@ -288,6 +303,10 @@ export class PreviewStage {
     }
 
     for (const wall of frame.walls) {
+      if (this.isRectOutsideStage(wall.x, wall.y, wall.width, wall.height)) {
+        continue;
+      }
+
       this.attackLayer.rect(wall.x, wall.y, wall.width, wall.height).fill({
         color: wall.color,
         alpha: wall.alpha,
@@ -346,6 +365,11 @@ export class PreviewStage {
     if (preset === "wall" || preset === "laser") {
       const width = Math.max(1, bullet.width ?? bullet.radius * (preset === "laser" ? 18 : 6));
       const height = Math.max(1, bullet.height ?? bullet.radius * (preset === "laser" ? 2 : 12));
+
+      if (this.isRotatedRectOutsideStage(bullet.x, bullet.y, width, height)) {
+        return;
+      }
+
       const points = buildRotatedRectPoints(bullet.x, bullet.y, width, height, angleDegrees);
 
       this.attackLayer.poly(points).fill({ color: bullet.color, alpha: bullet.alpha });
@@ -354,22 +378,39 @@ export class PreviewStage {
 
     if (preset === "square") {
       const size = Math.max(1, bullet.width ?? bullet.radius * 2);
-      const points = buildRotatedRectPoints(bullet.x, bullet.y, size, Math.max(1, bullet.height ?? size), angleDegrees);
+      const height = Math.max(1, bullet.height ?? size);
+
+      if (this.isRotatedRectOutsideStage(bullet.x, bullet.y, size, height)) {
+        return;
+      }
+
+      const points = buildRotatedRectPoints(bullet.x, bullet.y, size, height, angleDegrees);
 
       this.attackLayer.poly(points).fill({ color: bullet.color, alpha: bullet.alpha });
       return;
     }
 
     if (preset === "diamond") {
+      const radiusX = Math.max(1, (bullet.width ?? bullet.radius * 2) / 2);
+      const radiusY = Math.max(1, (bullet.height ?? bullet.radius * 2) / 2);
+
+      if (this.isCircleOutsideStage(bullet.x, bullet.y, Math.hypot(radiusX, radiusY))) {
+        return;
+      }
+
       const points = buildDiamondPoints(
         bullet.x,
         bullet.y,
-        Math.max(1, (bullet.width ?? bullet.radius * 2) / 2),
-        Math.max(1, (bullet.height ?? bullet.radius * 2) / 2),
+        radiusX,
+        radiusY,
         angleDegrees,
       );
 
       this.attackLayer.poly(points).fill({ color: bullet.color, alpha: bullet.alpha });
+      return;
+    }
+
+    if (this.isCircleOutsideStage(bullet.x, bullet.y, bullet.radius)) {
       return;
     }
 
@@ -414,6 +455,10 @@ export class PreviewStage {
     const strokeAlpha = Math.min(1, hazard.alpha + 0.18);
 
     if (hazard.shape === "circle") {
+      if (this.isCircleOutsideStage(hazard.x, hazard.y, hazard.radius + hazard.strokeWidth)) {
+        return;
+      }
+
       if (hazard.filled) {
         this.attackLayer.circle(hazard.x, hazard.y, hazard.radius).fill({ color: hazard.color, alpha });
       }
@@ -429,9 +474,21 @@ export class PreviewStage {
     }
 
     if (hazard.shape === "line") {
+      if (this.isRotatedRectOutsideStage(hazard.x, hazard.y, hazard.width, hazard.strokeWidth)) {
+        return;
+      }
+
       const linePoints = buildRotatedRectPoints(hazard.x, hazard.y, hazard.width, hazard.strokeWidth, hazard.rotation);
 
       this.attackLayer.poly(linePoints).fill({ color: hazard.color, alpha: strokeAlpha });
+      return;
+    }
+
+    if (
+      hazard.shape === "rectangle" || hazard.shape === "square"
+        ? this.isRotatedRectOutsideStage(hazard.x, hazard.y, hazard.width, hazard.height)
+        : this.isCircleOutsideStage(hazard.x, hazard.y, hazard.radius + hazard.strokeWidth)
+    ) {
       return;
     }
 
@@ -454,6 +511,10 @@ export class PreviewStage {
   }
 
   private drawLaser(laser: LaserRender): void {
+    if (this.isRotatedRectOutsideStage(laser.x, laser.y, laser.length, laser.width)) {
+      return;
+    }
+
     const points = buildRotatedRectPoints(laser.x, laser.y, laser.length, laser.width, laser.angle);
 
     this.attackLayer.poly(points).fill({
@@ -464,6 +525,10 @@ export class PreviewStage {
 
   private drawCurvedLaser(laser: CurvedLaserRender): void {
     if (laser.points.length < 2) {
+      return;
+    }
+
+    if (this.arePointsOutsideStage(laser.points, laser.width)) {
       return;
     }
 
@@ -484,6 +549,10 @@ export class PreviewStage {
   }
 
   private drawShape(shape: ShapeRender): void {
+    if (this.isCircleOutsideStage(shape.x, shape.y, shape.radius)) {
+      return;
+    }
+
     const points: number[] = [];
 
     for (let index = 0; index < shape.sides; index += 1) {
@@ -495,6 +564,34 @@ export class PreviewStage {
       color: shape.color,
       alpha: shape.alpha,
     });
+  }
+
+  private isCircleOutsideStage(x: number, y: number, radius: number): boolean {
+    return x + radius < 0 || x - radius > this.stageSize.width || y + radius < 0 || y - radius > this.stageSize.height;
+  }
+
+  private isRectOutsideStage(x: number, y: number, width: number, height: number): boolean {
+    return x + width < 0 || x > this.stageSize.width || y + height < 0 || y > this.stageSize.height;
+  }
+
+  private isRotatedRectOutsideStage(x: number, y: number, width: number, height: number): boolean {
+    return this.isCircleOutsideStage(x, y, Math.hypot(width, height) / 2);
+  }
+
+  private arePointsOutsideStage(points: Array<{ x: number; y: number }>, padding: number): boolean {
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (const point of points) {
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    }
+
+    return maxX + padding < 0 || minX - padding > this.stageSize.width || maxY + padding < 0 || minY - padding > this.stageSize.height;
   }
 }
 
@@ -582,28 +679,38 @@ function buildRotatedRectPoints(x: number, y: number, length: number, width: num
   const angle = (angleDegrees * Math.PI) / 180;
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
-  const corners = [
-    { x: -halfLength, y: -halfWidth },
-    { x: halfLength, y: -halfWidth },
-    { x: halfLength, y: halfWidth },
-    { x: -halfLength, y: halfWidth },
-  ];
+  const x1 = -halfLength;
+  const y1 = -halfWidth;
+  const x2 = halfLength;
+  const y2 = halfWidth;
 
-  return corners.flatMap((corner) => [x + corner.x * cos - corner.y * sin, y + corner.x * sin + corner.y * cos]);
+  return [
+    x + x1 * cos - y1 * sin,
+    y + x1 * sin + y1 * cos,
+    x + x2 * cos - y1 * sin,
+    y + x2 * sin + y1 * cos,
+    x + x2 * cos - y2 * sin,
+    y + x2 * sin + y2 * cos,
+    x + x1 * cos - y2 * sin,
+    y + x1 * sin + y2 * cos,
+  ];
 }
 
 function buildDiamondPoints(x: number, y: number, radiusX: number, radiusY: number, angleDegrees: number): number[] {
   const angle = (angleDegrees * Math.PI) / 180;
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
-  const points = [
-    { x: 0, y: -radiusY },
-    { x: radiusX, y: 0 },
-    { x: 0, y: radiusY },
-    { x: -radiusX, y: 0 },
-  ];
 
-  return points.flatMap((point) => [x + point.x * cos - point.y * sin, y + point.x * sin + point.y * cos]);
+  return [
+    x + radiusY * sin,
+    y - radiusY * cos,
+    x + radiusX * cos,
+    y + radiusX * sin,
+    x - radiusY * sin,
+    y + radiusY * cos,
+    x - radiusX * cos,
+    y - radiusX * sin,
+  ];
 }
 
 function clamp(value: number, min: number, max: number): number {
