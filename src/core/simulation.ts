@@ -64,6 +64,7 @@ export function buildAttackFrame(events: AttackEvent[], time: number, stage: Sta
         frame.bullets.push(...buildSpawnRadial(event, time, playerPosition));
         break;
       case "spawn_enemy_origin":
+        pushIfDefined(frame.warnings, buildSpawnEnemyWarning(event, time, stage));
         pushIfDefined(frame.shapes, buildSpawnEnemyOrigin(event, time));
         break;
       case "fire_from_moving_origin":
@@ -288,6 +289,35 @@ function buildSpawnEnemyOrigin(event: SpawnEnemyOriginEvent, time: number) {
     sides: 4,
     color: event.color,
     alpha: 0.95 * Math.min(1, scale),
+  };
+}
+
+function buildSpawnEnemyWarning(event: SpawnEnemyOriginEvent, time: number, stage: StageSize): HazardRender | undefined {
+  const leadTime = Math.max(0, event.enemyWarningTime);
+  const age = time - event.startTime;
+
+  if (leadTime <= 0 || age < -leadTime || age >= 0) {
+    return undefined;
+  }
+
+  const progress = clamp((age + leadTime) / leadTime, 0, 1);
+  const pulse = 0.55 + Math.sin(progress * Math.PI * 6) * 0.16;
+
+  return {
+    eventId: event.id,
+    shape: "circle",
+    x: clamp(event.enemyStartX, 0, stage.width),
+    y: clamp(event.enemyStartY, 0, stage.height),
+    width: event.originSize * 2,
+    height: event.originSize * 2,
+    radius: event.originSize * (1.05 + progress * 0.35),
+    rotation: 0,
+    sides: 32,
+    strokeWidth: Math.max(2, event.originSize * 0.09),
+    filled: false,
+    isWarning: true,
+    color: event.color,
+    alpha: clamp(pulse, 0.2, 0.9),
   };
 }
 

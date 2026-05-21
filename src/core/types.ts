@@ -61,6 +61,14 @@ export interface PreviewImageAsset {
   dataUrl: string;
 }
 
+export type DifficultyId = "easy" | "normal" | "lunatic";
+
+export interface EventDifficultySettings {
+  visible?: boolean;
+  countScale?: number;
+  warningTimeScale?: number;
+}
+
 export interface BaseAttackEvent {
   id: string;
   kind: AttackEventKind;
@@ -72,6 +80,7 @@ export interface BaseAttackEvent {
   timelineLane?: number;
   packageId?: string;
   packageLocked?: boolean;
+  difficulty?: Partial<Record<DifficultyId, EventDifficultySettings>>;
 }
 
 export interface AttackPackageEvent extends BaseAttackEvent {
@@ -81,6 +90,7 @@ export interface AttackPackageEvent extends BaseAttackEvent {
   seed: number;
   generatedEventIds: string[];
   previewBulletTexture?: PreviewImageAsset | null;
+  previewBulletTextureScale?: number;
   packageCount: number;
   packageAngleWidth: number;
   packageStartAngle: number;
@@ -178,12 +188,15 @@ export interface SpawnRadialEvent extends BaseAttackEvent, BulletMotionFields {
 export interface SpawnEnemyOriginEvent extends BaseAttackEvent, BulletMotionFields {
   kind: "spawn_enemy_origin";
   originSize: number;
+  enemyWarningTime: number;
   enemyStartX: number;
   enemyStartY: number;
   enemyEndX: number;
   enemyEndY: number;
   enemyEnterTime: number;
   enemyExitTime: number;
+  previewEnemyTexture?: PreviewImageAsset | null;
+  previewEnemyTextureScale?: number;
 }
 
 export interface FireFromMovingOriginEvent extends BaseAttackEvent, BulletMotionFields, FireClipFields {
@@ -433,6 +446,7 @@ export interface BulletPattern {
   stage: StageSize;
   timeline: TimelineSettings;
   timelineLaneCount?: number;
+  activeDifficulty?: DifficultyId;
   events: AttackEvent[];
 }
 

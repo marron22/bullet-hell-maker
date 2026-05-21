@@ -146,6 +146,7 @@ export function createStarterPattern(): BulletPattern {
     duration: 29,
     stage: starterStage,
     timelineLaneCount: 4,
+    activeDifficulty: "normal",
     timeline: {
       musicOffset: 0,
       bpm: 120,

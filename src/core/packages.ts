@@ -528,6 +528,8 @@ export function createAttackPackageEvent(kind: AttackPackageKind, startTime: num
     timelineLane: 0,
     seed: Math.floor(1000 + Math.random() * 900000),
     generatedEventIds: [],
+    previewBulletTexture: null,
+    previewBulletTextureScale: 1,
     packageCount: 6,
     packageAngleWidth: 120,
     packageStartAngle: 0,

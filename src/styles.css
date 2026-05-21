@@ -208,7 +208,8 @@ button:disabled {
   border-color: #3a3a3a;
 }
 
-.mode-toggle {
+.mode-toggle,
+.difficulty-toggle {
   align-items: center;
   background: #070707;
   border: 1px solid #303030;
@@ -219,7 +220,8 @@ button:disabled {
   padding: 3px;
 }
 
-.mode-toggle-button {
+.mode-toggle-button,
+.difficulty-toggle-button {
   background: transparent;
   border-color: transparent;
   color: #bdbdbd;
@@ -228,10 +230,15 @@ button:disabled {
   padding: 0 9px;
 }
 
-.mode-toggle-button.is-active {
+.mode-toggle-button.is-active,
+.difficulty-toggle-button.is-active {
   background: #f1f1f1;
   border-color: #ffffff;
   color: #070707;
+}
+
+.difficulty-toggle {
+  margin-left: 0;
 }
 
 .preview-options {

@@ -76,12 +76,15 @@ export function createAttackEvent(kind: AttackEventKind, startTime: number, stag
         color: defaultAttackColor,
         ...baseMotion,
         originSize: 34,
+        enemyWarningTime: 0.55,
         enemyStartX: stage.width / 2,
         enemyStartY: -60,
         enemyEndX: stage.width / 2,
         enemyEndY: stage.height * 0.28,
         enemyEnterTime: 0.42,
         enemyExitTime: 0.28,
+        previewEnemyTexture: null,
+        previewEnemyTextureScale: 1,
       };
     case "fire_from_moving_origin":
       return {

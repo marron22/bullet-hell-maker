@@ -21,7 +21,7 @@ import {
 import { createStarterPattern } from "./core/samplePattern";
 import { buildAttackFrame, clearAimCache } from "./core/simulation";
 import { PlaybackClock } from "./core/playback";
-import type { AttackEvent, AttackEventKind, AttackFrame, AttackPackageEvent, AttackPackageKind, BulletPattern, CurvedLaserRender, HazardRender, LaserRender, PreviewImageAsset, ShapeRender, TimelineSettings, WallRender } from "./core/types";
+import type { AttackEvent, AttackEventKind, AttackFrame, AttackPackageEvent, AttackPackageKind, BulletPattern, CurvedLaserRender, DifficultyId, EventDifficultySettings, HazardRender, LaserRender, PreviewImageAsset, ShapeRender, SpawnEnemyOriginEvent, TimelineSettings, WallRender } from "./core/types";
 import { buildUnitySeparatedExport } from "./core/unityExport";
 import { PreviewStage, type PackageHandleRender } from "./preview/PreviewStage";
 
@@ -63,8 +63,9 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.15";
+const appVersion = "v0.16";
 let pattern = createStarterPattern();
+let activeDifficultyId: DifficultyId = pattern.activeDifficulty ?? "normal";
 const clock = new PlaybackClock();
 let selectedEventId: string | null = pattern.events[0]?.id ?? null;
 let selectedEventIds = new Set<string>(selectedEventId ? [selectedEventId] : []);
@@ -103,6 +104,7 @@ let suppressNextPlayClick = false;
 let suppressNextResetClick = false;
 let activePackageHandleId: string | null = null;
 let packageTextureTargetId: string | null = null;
+let enemyTextureTargetId: string | null = null;
 let previewEventWindows: PreviewEventWindow[] | null = null;
 let lastPreviewWaveformRenderTime = 0;
 let previewLightweightEnabled = true;
@@ -130,8 +132,30 @@ const previewMoveSpeed = 375;
 const previewDashSpeed = 1120;
 const previewDashDuration = 0.13;
 const previewDashCooldown = 0.34;
+const previewDashAcceleration = 34;
+const previewMoveAcceleration = 18;
+const previewStopDamping = 22;
 const minimumTimelineLaneCount = 1;
 const maximumTimelineLaneCount = 12;
+const difficultyIds = ["easy", "normal", "lunatic"] as const;
+const difficultyLabels: Record<DifficultyId, string> = {
+  easy: "Easy",
+  normal: "Normal",
+  lunatic: "Lunatic",
+};
+const countDifficultyFields = [
+  "clipCount",
+  "radialCount",
+  "laserCount",
+  "bulletCount",
+  "wayCount",
+  "angleCount",
+  "speedLayers",
+  "packageCount",
+  "packageBulletCount",
+] as const;
+const warningDifficultyFields = ["warningTime", "enemyWarningTime"] as const;
+const previewPlayerVelocity = { x: 0, y: 0 };
 const undoStack: BulletPattern[] = [];
 const redoStack: BulletPattern[] = [];
 const defaultTimelineSettings: TimelineSettings = {
@@ -152,6 +176,7 @@ const timeFieldNames = new Set([
   "holdTime",
   "returnTime",
   "switchInterval",
+  "enemyWarningTime",
   "enemyEnterTime",
   "enemyExitTime",
 ]);
@@ -216,7 +241,7 @@ const propertyGroups: PropertyGroupConfig[] = [
   { title: "Origin", numberFields: ["originX", "originY", "originVx", "originVy"] },
   { title: "Trajectory", numberFields: ["pathStartX", "pathSpeed", "polynomialA", "polynomialB", "polynomialC", "polynomialD", "gravity"] },
   { title: "Polar", numberFields: ["polarRadius", "polarRadiusVelocity", "polarTheta", "polarThetaVelocity"] },
-  { title: "Enemy Preview", numberFields: ["enemyStartX", "enemyStartY", "enemyEndX", "enemyEndY", "enemyEnterTime", "enemyExitTime", "originSize"], includeColor: true },
+  { title: "Enemy Preview", numberFields: ["enemyStartX", "enemyStartY", "enemyEndX", "enemyEndY", "enemyWarningTime", "enemyEnterTime", "enemyExitTime", "originSize", "previewEnemyTextureScale"], includeColor: true },
   { title: "Visual", selectFields: ["typeId"], numberFields: ["visualSize", "visualWidth", "visualHeight", "visualAngle", "angleSpeed"], includeColor: true },
 ];
 
@@ -255,12 +280,14 @@ const numberFieldConfigs: NumberFieldConfig[] = [
   { name: "radialInterval", label: "円形間隔", min: 0, max: 10, step: 0.05, kinds: ["spawn_radial"] },
   { name: "radialStartAngle", label: "開始角度", min: -720, max: 720, step: 5, kinds: ["spawn_radial"] },
   { name: "originSize", label: "敵サイズ", min: 4, max: 240, step: 1, kinds: ["spawn_enemy_origin"] },
+  { name: "enemyWarningTime", label: "敵予告時間", min: 0, max: 5, step: 0.05, kinds: ["spawn_enemy_origin"] },
   { name: "enemyStartX", label: "出現X", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
   { name: "enemyStartY", label: "出現Y", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
   { name: "enemyEndX", label: "消えるX", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
   { name: "enemyEndY", label: "消えるY", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
   { name: "enemyEnterTime", label: "出現時間", min: 0.01, max: 5, step: 0.05, kinds: ["spawn_enemy_origin"] },
   { name: "enemyExitTime", label: "消える時間", min: 0.01, max: 5, step: 0.05, kinds: ["spawn_enemy_origin"] },
+  { name: "previewEnemyTextureScale", label: "敵テクスチャ倍率", min: 0.1, max: 5, step: 0.05, kinds: ["spawn_enemy_origin"] },
   { name: "laserCount", label: "レーザー本数", min: 1, max: 64, step: 1, integer: true, kinds: ["spawn_curved_laser"] },
   { name: "laserAngleStepDeg", label: "レーザー角度間隔", min: -360, max: 360, step: 1, kinds: ["spawn_curved_laser"] },
   { name: "laserWidth", label: "レーザー幅", min: 1, max: 200, step: 1, kinds: ["spawn_curved_laser"] },
@@ -459,9 +486,11 @@ const propertyDescriptions: Record<string, string> = {
   enemyStartY: "敵が出現し始めるY位置です。",
   enemyEndX: "敵が消えるときのX位置です。",
   enemyEndY: "敵が消えるときのY位置です。",
+  enemyWarningTime: "敵が出現する前に開始位置へ表示する予告時間です。",
   enemyEnterTime: "敵がびよんと大きくなって出てくる時間です。",
   enemyExitTime: "敵がひゅんと小さくなって消える時間です。",
   originSize: "敵プレビューの基準サイズです。",
+  previewEnemyTextureScale: "敵テクスチャをプレビューで表示するときの倍率です。",
   color: "プレビューとタイムラインで使う攻撃色です。",
   musicOffset: "音楽グリッドの開始位置です。曲の拍と線を合わせるために使います。",
   bpm: "1分あたりの拍数です。変更すると1小節の時間も更新されます。",
@@ -527,6 +556,9 @@ appRoot.innerHTML = `
         <button class="mode-toggle-button" type="button" data-editor-mode="trajectory">軌跡編集</button>
         <button class="mode-toggle-button" type="button" data-editor-mode="preview">プレビュー</button>
       </div>
+      <div class="difficulty-toggle" role="group" aria-label="難易度">
+        ${difficultyIds.map((difficulty) => `<button class="difficulty-toggle-button ${difficulty === activeDifficultyId ? "is-active" : ""}" type="button" data-difficulty-id="${difficulty}">${difficultyLabels[difficulty]}</button>`).join("")}
+      </div>
       <div class="preview-options" aria-label="プレビュー設定">
         <button id="preview-lightweight-toggle-button" class="preview-option-button is-active" type="button" aria-pressed="true" title="プレビューの軽量化">${iconSvg("pulse")}<span>軽量</span></button>
         <button id="preview-timeline-toggle-button" class="preview-option-button is-active" type="button" aria-pressed="true" title="タイムライン表示">${iconSvg("eye")}<span>タイムライン</span></button>
@@ -536,6 +568,7 @@ appRoot.innerHTML = `
         <input id="ai-beatmap-input" type="file" accept="application/json,.json" hidden />
         <input id="package-code-input" type="file" accept=".mjs,text/javascript,application/javascript" hidden />
         <input id="package-bullet-texture-input" type="file" accept="image/*" hidden />
+        <input id="enemy-preview-texture-input" type="file" accept="image/*" hidden />
         <input id="music-input" type="file" accept="audio/*" hidden />
       </div>
       <div class="toolbar-spacer"></div>
@@ -639,6 +672,7 @@ const importInput = requireElement<HTMLInputElement>("#import-input");
 const aiBeatmapInput = requireElement<HTMLInputElement>("#ai-beatmap-input");
 const packageCodeInput = requireElement<HTMLInputElement>("#package-code-input");
 const packageBulletTextureInput = requireElement<HTMLInputElement>("#package-bullet-texture-input");
+const enemyPreviewTextureInput = requireElement<HTMLInputElement>("#enemy-preview-texture-input");
 const musicInput = requireElement<HTMLInputElement>("#music-input");
 const timeDisplay = requireElement<HTMLDivElement>("#time-display");
 const musicDisplay = requireElement<HTMLDivElement>("#music-display");
@@ -667,6 +701,7 @@ const menuPopovers = [...document.querySelectorAll<HTMLDivElement>("[data-menu]"
 const inspectorTabButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-inspector-tab]")];
 const inspectorPanels = [...document.querySelectorAll<HTMLElement>("[data-inspector-panel]")];
 const editorModeButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-editor-mode]")];
+const difficultyButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-difficulty-id]")];
 
 const preview = new PreviewStage(pattern.stage);
 await preview.mount(previewHost);
@@ -715,6 +750,22 @@ editorModeButtons.forEach((button) => {
     if (mode === "global" || mode === "trajectory" || mode === "preview") {
       setEditorMode(mode);
     }
+  });
+});
+
+difficultyButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const difficultyId = button.dataset.difficultyId;
+
+    if (!isDifficultyId(difficultyId) || difficultyId === activeDifficultyId) {
+      return;
+    }
+
+    activeDifficultyId = difficultyId;
+    pattern.activeDifficulty = difficultyId;
+    previewEventWindows = null;
+    clearAimCache();
+    renderEverything();
   });
 });
 
@@ -904,6 +955,21 @@ packageBulletTextureInput.addEventListener("change", () => {
   packageTextureTargetId = null;
 });
 
+enemyPreviewTextureInput.addEventListener("change", () => {
+  const file = enemyPreviewTextureInput.files?.[0];
+  const enemyEvent = getEnemyEventById(enemyTextureTargetId) ?? getSelectedEnemyEvent();
+
+  if (!file || !enemyEvent) {
+    enemyPreviewTextureInput.value = "";
+    enemyTextureTargetId = null;
+    return;
+  }
+
+  void loadEnemyPreviewTexture(enemyEvent, file);
+  enemyPreviewTextureInput.value = "";
+  enemyTextureTargetId = null;
+});
+
 musicInput.addEventListener("change", () => {
   const file = musicInput.files?.[0];
 
@@ -1012,11 +1078,11 @@ document.addEventListener("keydown", (event) => {
       return;
     }
 
-    if (isPreviewControlCode(event.code)) {
+    if (isPreviewControlCode(event.code) || isPreviewDashKey(event)) {
       event.preventDefault();
       pressedPreviewKeys.add(event.code);
 
-      if ((event.code === "ShiftLeft" || event.code === "ShiftRight") && !event.repeat) {
+      if (isPreviewDashKey(event) && !event.repeat) {
         dashRequested = true;
       }
 
@@ -1083,7 +1149,7 @@ document.addEventListener("keydown", (event) => {
 });
 
 document.addEventListener("keyup", (event) => {
-  if (!isPreviewControlCode(event.code)) {
+  if (!isPreviewControlCode(event.code) && !isPreviewDashKey(event)) {
     return;
   }
 
@@ -1131,6 +1197,24 @@ propertyForm.addEventListener("click", (event) => {
     return;
   }
 
+  const enemyTextureAction = target.dataset.enemyTextureAction;
+
+  if (enemyTextureAction) {
+    const enemyEvent = getSelectedEnemyEvent();
+
+    if (!enemyEvent) {
+      return;
+    }
+
+    if (enemyTextureAction === "load") {
+      enemyTextureTargetId = enemyEvent.id;
+      enemyPreviewTextureInput.click();
+    } else if (enemyTextureAction === "clear") {
+      clearEnemyPreviewTexture(enemyEvent);
+    }
+    return;
+  }
+
   const timeMode = target.dataset.timeMode;
 
   if (timeMode === "seconds" || timeMode === "beats") {
@@ -1166,6 +1250,11 @@ function handlePropertyUpdate(event: Event): void {
   }
 
   if (event.type === "change" && input instanceof HTMLInputElement) {
+    return;
+  }
+
+  if (input.dataset.difficultyControl) {
+    handleDifficultyControlInput(selectedEvent, input);
     return;
   }
 
@@ -1273,6 +1362,24 @@ function handlePackagePanelInput(event: Event): void {
     return;
   }
 
+  if (input.dataset.difficultyControl) {
+    handleDifficultyControlInput(packageEvent, input);
+    return;
+  }
+
+  if (input.name === "previewBulletTextureScale" && input instanceof HTMLInputElement) {
+    const nextScale = clamp(Number(input.value), 0.1, 5);
+
+    if (!Number.isFinite(nextScale) || nextScale === getPackageBulletTextureScale(packageEvent)) {
+      return;
+    }
+
+    pushHistory();
+    packageEvent.previewBulletTextureScale = nextScale;
+    renderEverything();
+    return;
+  }
+
   const config = getPackageFieldConfigs(packageEvent).find((field) => field.name === input.name);
 
   if (!config) {
@@ -1332,7 +1439,7 @@ function handlePackagePanelClick(event: MouseEvent): void {
 
     if (child) {
       pushHistory();
-      child.visible = !isEventVisible(child);
+      setDifficultyVisible(child, !isEventVisibleInActiveDifficulty(child));
       renderEverything();
     }
     return;
@@ -1577,7 +1684,7 @@ function getProjectCustomPackageAssets(): ProjectCustomPackageAsset[] {
 }
 
 function exportUnityPattern(): void {
-  const unityExport = buildUnitySeparatedExport(pattern);
+  const unityExport = buildUnitySeparatedExport(getDifficultyAdjustedPattern());
   const baseName = pattern.title.replace(/[^\w-]+/g, "_") || "danmaku_pattern";
 
   downloadJson(unityExport.stageData, `${baseName}.stagedata.json`);
@@ -1621,8 +1728,10 @@ async function importPattern(file: File): Promise<void> {
         ...parsed.timeline,
       },
       timelineLaneCount: Number(parsed.timelineLaneCount) || minimumTimelineLaneCount,
+      activeDifficulty: isDifficultyId(parsed.activeDifficulty) ? parsed.activeDifficulty : "normal",
       events: parsed.events.map((event) => normalizeImportedEvent(event, parsed.stage!)),
     };
+    activeDifficultyId = pattern.activeDifficulty ?? "normal";
     if (parsed.music?.dataUrl) {
       await loadMusicFromProjectAsset(parsed.music);
       pattern.duration = Math.max(pattern.duration, audio.duration || 0);
@@ -2038,6 +2147,7 @@ async function setPackageBulletTextureAsset(packageEvent: AttackPackageEvent, as
 
   pushHistory();
   packageEvent.previewBulletTexture = asset;
+  packageEvent.previewBulletTextureScale = getPackageBulletTextureScale(packageEvent);
   renderEverything();
 }
 
@@ -2047,12 +2157,48 @@ function clearPackageBulletTexture(packageEvent: AttackPackageEvent): void {
   renderEverything();
 }
 
+async function loadEnemyPreviewTexture(enemyEvent: SpawnEnemyOriginEvent, file: File): Promise<void> {
+  if (!file.type.startsWith("image/")) {
+    window.alert("画像ファイルを選択してください。");
+    return;
+  }
+
+  try {
+    const asset = await buildProjectImageAsset(file);
+
+    await setEnemyPreviewTextureAsset(enemyEvent, asset);
+  } catch (error) {
+    console.error(error);
+    window.alert("敵テクスチャを読み込めませんでした。別の画像を試してください。");
+  }
+}
+
+async function setEnemyPreviewTextureAsset(enemyEvent: SpawnEnemyOriginEvent, asset: PreviewImageAsset | null): Promise<void> {
+  if (asset?.dataUrl) {
+    await preview.loadEnemyTexture(asset.dataUrl);
+  }
+
+  pushHistory();
+  enemyEvent.previewEnemyTexture = asset;
+  enemyEvent.previewEnemyTextureScale = getEnemyTextureScale(enemyEvent);
+  renderEverything();
+}
+
+function clearEnemyPreviewTexture(enemyEvent: SpawnEnemyOriginEvent): void {
+  pushHistory();
+  enemyEvent.previewEnemyTexture = null;
+  renderEverything();
+}
+
 async function preloadPackageBulletTextures(): Promise<void> {
   const dataUrls = new Set<string>();
 
   for (const event of pattern.events) {
     if (isAttackPackageEvent(event) && event.previewBulletTexture?.dataUrl) {
       dataUrls.add(event.previewBulletTexture.dataUrl);
+    }
+    if (event.kind === "spawn_enemy_origin" && event.previewEnemyTexture?.dataUrl) {
+      dataUrls.add(event.previewEnemyTexture.dataUrl);
     }
   }
 
@@ -2199,6 +2345,8 @@ function setEditorMode(mode: EditorMode): void {
     dashRequested = false;
     dashTimeRemaining = 0;
     dashCooldownRemaining = 0;
+    previewPlayerVelocity.x = 0;
+    previewPlayerVelocity.y = 0;
     playerWasHit = false;
     preview.setPointerControlEnabled(false);
     preview.resetPlayerPosition();
@@ -2213,6 +2361,8 @@ function setEditorMode(mode: EditorMode): void {
     }
   } else {
     pressedPreviewKeys.clear();
+    previewPlayerVelocity.x = 0;
+    previewPlayerVelocity.y = 0;
     preview.setPointerControlEnabled(editorMode === "global");
 
     if (editorMode === "trajectory") {
@@ -2294,6 +2444,7 @@ function renderPreview(): void {
     duration: pattern.duration,
     events: previewEvents,
     bulletTexturesByEventId: buildPreviewBulletTextureMap(previewEvents),
+    enemyTexturesByEventId: buildPreviewEnemyTextureMap(previewEvents),
     selectedEventId,
     editEventId: editingEventId,
     trajectories: buildVisibleTrajectories(),
@@ -2304,30 +2455,56 @@ function renderPreview(): void {
   });
 }
 
-function buildPreviewBulletTextureMap(events: AttackEvent[]): Map<string, string> {
-  const texturesByEventId = new Map<string, string>();
+function buildPreviewBulletTextureMap(events: AttackEvent[]): Map<string, { dataUrl: string; scale: number }> {
+  const texturesByEventId = new Map<string, { dataUrl: string; scale: number }>();
 
   for (const event of events) {
     const parentPackage = getParentPackage(event);
     const dataUrl = parentPackage?.previewBulletTexture?.dataUrl;
 
     if (dataUrl) {
-      texturesByEventId.set(event.id, dataUrl);
+      texturesByEventId.set(event.id, {
+        dataUrl,
+        scale: getPackageBulletTextureScale(parentPackage),
+      });
     }
   }
 
   return texturesByEventId;
 }
 
+function buildPreviewEnemyTextureMap(events: AttackEvent[]): Map<string, { dataUrl: string; scale: number }> {
+  const texturesByEventId = new Map<string, { dataUrl: string; scale: number }>();
+
+  for (const event of events) {
+    if (event.kind === "spawn_enemy_origin" && event.previewEnemyTexture?.dataUrl) {
+      texturesByEventId.set(event.id, {
+        dataUrl: event.previewEnemyTexture.dataUrl,
+        scale: getEnemyTextureScale(event),
+      });
+    }
+  }
+
+  return texturesByEventId;
+}
+
+function getPackageBulletTextureScale(packageEvent: AttackPackageEvent): number {
+  return clamp(Number(packageEvent.previewBulletTextureScale) || 1, 0.1, 5);
+}
+
+function getEnemyTextureScale(enemyEvent: SpawnEnemyOriginEvent): number {
+  return clamp(Number(enemyEvent.previewEnemyTextureScale) || 1, 0.1, 5);
+}
+
 function getPreviewEvents(currentTime = clock.time): AttackEvent[] {
   const editingEvent = getEditingEvent();
 
   if (editorMode === "trajectory") {
-    return editingEvent && isPreviewRenderableEvent(editingEvent) ? [editingEvent] : [];
+    return editingEvent && isPreviewRenderableEvent(editingEvent) ? [getDifficultyAdjustedEvent(editingEvent)] : [];
   }
 
   if (editorMode !== "preview" || !previewLightweightEnabled) {
-    return pattern.events.filter(isPreviewRenderableEvent);
+    return pattern.events.filter(isPreviewRenderableEvent).map((event) => getDifficultyAdjustedEvent(event));
   }
 
   const activeEvents: AttackEvent[] = [];
@@ -2352,18 +2529,22 @@ function getPreviewEventWindows(): PreviewEventWindow[] {
 
   previewEventWindows = pattern.events
     .filter(isPreviewRenderableEvent)
-    .map((event) => ({
-      event,
-      activeStartTime: getPreviewEventActiveStartTime(event),
-      activeEndTime: getEventEndTime(event),
-    }))
+    .map((event) => {
+      const adjustedEvent = getDifficultyAdjustedEvent(event);
+
+      return {
+        event: adjustedEvent,
+        activeStartTime: getPreviewEventActiveStartTime(adjustedEvent),
+        activeEndTime: getEventEndTime(adjustedEvent),
+      };
+    })
     .sort((a, b) => a.activeStartTime - b.activeStartTime);
 
   return previewEventWindows;
 }
 
 function isPreviewRenderableEvent(event: AttackEvent): boolean {
-  return !isAttackPackageEvent(event) && isEventVisible(event) && isParentPackageVisible(event);
+  return !isAttackPackageEvent(event) && isEventVisibleInActiveDifficulty(event) && isParentPackageVisibleInActiveDifficulty(event);
 }
 
 function getPreviewEventActiveStartTime(event: AttackEvent): number {
@@ -2371,6 +2552,10 @@ function getPreviewEventActiveStartTime(event: AttackEvent): number {
 }
 
 function getEventWarningLeadTime(event: AttackEvent): number {
+  if (event.kind === "spawn_enemy_origin") {
+    return Math.max(0, event.enemyWarningTime);
+  }
+
   if ("warningTime" in event && typeof event.warningTime === "number" && Number.isFinite(event.warningTime)) {
     return Math.max(0, event.warningTime);
   }
@@ -2378,23 +2563,47 @@ function getEventWarningLeadTime(event: AttackEvent): number {
   return 0;
 }
 
-type PackageHandleRole = "source" | "target" | "start" | "area" | "center" | "position";
+type PackageHandleRole = "source" | "target" | "start" | "area" | "center" | "position" | "enemyStart" | "enemyEnd";
 
 function buildPackagePreviewHandles(): PackageHandleRender[] {
-  if (editorMode === "preview" || activeInspectorTab !== "package") {
+  if (editorMode === "preview") {
     return [];
+  }
+
+  const handles: PackageHandleRender[] = [];
+  const selectedEnemy = getSelectedEnemyEvent();
+
+  if (selectedEnemy && activeInspectorTab === "properties") {
+    handles.push(
+      {
+        id: getPackageHandleId(selectedEnemy, "enemyStart"),
+        x: clamp(selectedEnemy.enemyStartX, 0, pattern.stage.width),
+        y: clamp(selectedEnemy.enemyStartY, 0, pattern.stage.height),
+        color: 0xffd166,
+        secondary: true,
+      },
+      {
+        id: getPackageHandleId(selectedEnemy, "enemyEnd"),
+        x: clamp(selectedEnemy.enemyEndX, 0, pattern.stage.width),
+        y: clamp(selectedEnemy.enemyEndY, 0, pattern.stage.height),
+        color: selectedEnemy.color,
+      },
+    );
+  }
+
+  if (activeInspectorTab !== "package") {
+    return handles;
   }
 
   const packageEvent = getSelectedPackageEvent();
 
   if (!packageEvent) {
-    return [];
+    return handles;
   }
 
   const sourceColor = packageEvent.color;
   const secondaryColor = 0xffd166;
   const areaColor = 0x27dfff;
-  const handles: PackageHandleRender[] = [];
   const addHandle = (role: PackageHandleRole, x: number, y: number, color = sourceColor, secondary = false) => {
     handles.push({
       id: getPackageHandleId(packageEvent, role),
@@ -2443,8 +2652,8 @@ function buildPackagePreviewHandles(): PackageHandleRender[] {
   return handles;
 }
 
-function getPackageHandleId(packageEvent: AttackPackageEvent, role: PackageHandleRole): string {
-  return `${packageEvent.id}:${role}`;
+function getPackageHandleId(event: { id: string }, role: PackageHandleRole): string {
+  return `${event.id}:${role}`;
 }
 
 function parsePackageHandleId(handleId: string): { packageId: string; role: PackageHandleRole } | undefined {
@@ -2457,7 +2666,7 @@ function parsePackageHandleId(handleId: string): { packageId: string; role: Pack
   const packageId = handleId.slice(0, separatorIndex);
   const role = handleId.slice(separatorIndex + 1) as PackageHandleRole;
 
-  if (!["source", "target", "start", "area", "center", "position"].includes(role)) {
+  if (!["source", "target", "start", "area", "center", "position", "enemyStart", "enemyEnd"].includes(role)) {
     return undefined;
   }
 
@@ -2472,6 +2681,27 @@ function handlePackageHandleDrag(handleId: string, point: { x: number; y: number
   }
 
   const packageEvent = pattern.events.find((event): event is AttackPackageEvent => event.id === handle.packageId && isAttackPackageEvent(event));
+
+  if (handle.role === "enemyStart" || handle.role === "enemyEnd") {
+    const enemyEvent = getEnemyEventById(handle.packageId);
+
+    if (!enemyEvent || editorMode === "preview") {
+      return;
+    }
+
+    activePackageHandleId = handleId;
+
+    if (phase === "start") {
+      pushHistory();
+      selectSingleEvent(enemyEvent.id);
+      activeInspectorTab = "properties";
+    }
+
+    applyEnemyHandlePoint(enemyEvent, handle.role, point);
+    clearAimCache();
+    renderEverything();
+    return;
+  }
 
   if (!packageEvent || editorMode === "preview") {
     return;
@@ -2489,6 +2719,19 @@ function handlePackageHandleDrag(handleId: string, point: { x: number; y: number
   refreshPackageGeneratedEvents(packageEvent);
   clearAimCache();
   renderEverything();
+}
+
+function applyEnemyHandlePoint(enemyEvent: SpawnEnemyOriginEvent, role: PackageHandleRole, point: { x: number; y: number }): void {
+  const x = clamp(point.x, 0, pattern.stage.width);
+  const y = clamp(point.y, 0, pattern.stage.height);
+
+  if (role === "enemyStart") {
+    enemyEvent.enemyStartX = x;
+    enemyEvent.enemyStartY = y;
+  } else if (role === "enemyEnd") {
+    enemyEvent.enemyEndX = x;
+    enemyEvent.enemyEndY = y;
+  }
 }
 
 function applyPackageHandlePoint(packageEvent: AttackPackageEvent, role: PackageHandleRole, point: { x: number; y: number }): void {
@@ -2639,15 +2882,33 @@ function updatePreviewPlayer(deltaSeconds: number): void {
   if (dashRequested && dashCooldownRemaining <= 0) {
     dashTimeRemaining = previewDashDuration;
     dashCooldownRemaining = previewDashCooldown;
+    if (!hasDirection) {
+      direction.x = lastPreviewDirection.x;
+      direction.y = lastPreviewDirection.y;
+    }
   }
 
   dashRequested = false;
 
   const dashActive = dashTimeRemaining > 0;
   const moveDirection = hasDirection ? direction : dashActive ? lastPreviewDirection : { x: 0, y: 0 };
-  const speed = dashActive ? previewDashSpeed : previewMoveSpeed;
+  const targetSpeed = dashActive ? previewDashSpeed : previewMoveSpeed;
+  const targetVelocity = {
+    x: moveDirection.x * targetSpeed,
+    y: moveDirection.y * targetSpeed,
+  };
+  const acceleration = dashActive ? previewDashAcceleration : hasDirection ? previewMoveAcceleration : previewStopDamping;
+  const blend = 1 - Math.exp(-acceleration * deltaSeconds);
 
-  preview.movePlayer(moveDirection.x * speed * deltaSeconds, moveDirection.y * speed * deltaSeconds);
+  previewPlayerVelocity.x += (targetVelocity.x - previewPlayerVelocity.x) * blend;
+  previewPlayerVelocity.y += (targetVelocity.y - previewPlayerVelocity.y) * blend;
+
+  if (!hasDirection && !dashActive && Math.hypot(previewPlayerVelocity.x, previewPlayerVelocity.y) < 1) {
+    previewPlayerVelocity.x = 0;
+    previewPlayerVelocity.y = 0;
+  }
+
+  preview.movePlayer(previewPlayerVelocity.x * deltaSeconds, previewPlayerVelocity.y * deltaSeconds);
 }
 
 function getPreviewMoveDirection(): { x: number; y: number } {
@@ -2688,6 +2949,10 @@ function isPreviewControlCode(code: string): boolean {
     code === "ShiftLeft" ||
     code === "ShiftRight"
   );
+}
+
+function isPreviewDashKey(event: KeyboardEvent): boolean {
+  return event.code === "ShiftLeft" || event.code === "ShiftRight" || event.key === "Shift";
 }
 
 function updatePreviewHitState(frame: AttackFrame, playerPosition: { x: number; y: number }): void {
@@ -2809,6 +3074,13 @@ function syncUi(): void {
   appShell.classList.toggle("is-preview-timeline-hidden", isPreviewMode && !previewTimelineVisible);
   for (const button of editorModeButtons) {
     const isActive = button.dataset.editorMode === editorMode;
+
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+  }
+
+  for (const button of difficultyButtons) {
+    const isActive = button.dataset.difficultyId === activeDifficultyId;
 
     button.classList.toggle("is-active", isActive);
     button.setAttribute("aria-pressed", String(isActive));
@@ -3043,7 +3315,7 @@ function renderEventList(): void {
     const card = document.createElement("div");
     const endTime = getEventEndTime(event);
     const isMutedByEditMode = editorMode === "trajectory" && editingEventId !== null && event.id !== editingEventId;
-    const isVisible = isEventVisible(event);
+    const isVisible = isEventVisibleInActiveDifficulty(event);
 
     card.className = `event-card ${isSelectedEvent(event) ? "is-selected" : ""} ${isMutedByEditMode ? "is-muted" : ""} ${!isVisible ? "is-hidden" : ""}`;
     card.innerHTML = `
@@ -3084,7 +3356,7 @@ function renderEventList(): void {
     });
     visibilityButton?.addEventListener("click", () => {
       pushHistory();
-      event.visible = !isEventVisible(event);
+      setDifficultyVisible(event, !isEventVisibleInActiveDifficulty(event));
       renderEverything();
     });
     eventList.appendChild(card);
@@ -3144,6 +3416,7 @@ function renderPropertyForm(): void {
   }
 
   const propertyGroupsHtml = renderPropertyGroups(selectedEvent);
+  const enemyTextureCard = selectedEvent.kind === "spawn_enemy_origin" ? renderEnemyTextureCard(selectedEvent) : "";
 
   propertyForm.innerHTML = `
     <div class="property-event-name">
@@ -3154,7 +3427,9 @@ function renderPropertyForm(): void {
       <button class="time-mode-button ${propertyTimeMode === "seconds" ? "is-active" : ""}" type="button" data-time-mode="seconds">seconds</button>
       <button class="time-mode-button ${propertyTimeMode === "beats" ? "is-active" : ""}" type="button" data-time-mode="beats">beats</button>
     </div>
+    ${renderDifficultyControls(selectedEvent)}
     ${propertyGroupsHtml}
+    ${enemyTextureCard}
     <button id="delete-event-button" class="danger-button" type="button">Delete selected event</button>
   `;
 }
@@ -3219,6 +3494,7 @@ function renderPackagePanel(): void {
       <input class="event-name-input" name="name" type="text" value="${escapeHtml(packageEvent.name)}" aria-label="package name" />
     </div>
     ${missingDefinitionNotice}
+    ${renderDifficultyControls(packageEvent)}
     <div class="property-group">
       <h3>Package</h3>
       <div class="property-group-fields">
@@ -3238,6 +3514,7 @@ function renderPackagePanel(): void {
 function renderPackageTextureCard(packageEvent: AttackPackageEvent): string {
   const asset = packageEvent.previewBulletTexture;
   const hasTexture = Boolean(asset?.dataUrl);
+  const textureScale = getPackageBulletTextureScale(packageEvent);
 
   return `
     <div class="preview-texture-card package-texture-card">
@@ -3245,11 +3522,60 @@ function renderPackageTextureCard(packageEvent: AttackPackageEvent): string {
         <h3>弾テクスチャ</h3>
         <p class="preview-texture-display ${hasTexture ? "has-texture" : ""}">${escapeHtml(asset?.name ?? "No texture")}</p>
       </div>
+      <label class="property-field">
+        <span title="このパッケージのテクスチャ弾だけをプレビューで拡大縮小します。">表示倍率</span>
+        <input name="previewBulletTextureScale" type="number" min="0.1" max="5" step="0.05" value="${formatPropertyNumber(textureScale)}" />
+      </label>
       <div class="preview-texture-actions">
         <button class="music-load-button" type="button" data-package-texture-action="load">${iconSvg("image")}<span>画像を読み込む</span></button>
         <button class="danger-button" type="button" data-package-texture-action="clear" ${hasTexture ? "" : "disabled"}>${iconSvg("trash")}<span>解除</span></button>
       </div>
     </div>
+  `;
+}
+
+function renderEnemyTextureCard(enemyEvent: SpawnEnemyOriginEvent): string {
+  const asset = enemyEvent.previewEnemyTexture;
+  const hasTexture = Boolean(asset?.dataUrl);
+
+  return `
+    <div class="preview-texture-card">
+      <div>
+        <h3>敵テクスチャ</h3>
+        <p class="preview-texture-display ${hasTexture ? "has-texture" : ""}">${escapeHtml(asset?.name ?? "No texture")}</p>
+      </div>
+      <div class="preview-texture-actions">
+        <button class="music-load-button" type="button" data-enemy-texture-action="load">${iconSvg("image")}<span>画像を読み込む</span></button>
+        <button class="danger-button" type="button" data-enemy-texture-action="clear" ${hasTexture ? "" : "disabled"}>${iconSvg("trash")}<span>解除</span></button>
+      </div>
+    </div>
+  `;
+}
+
+function renderDifficultyControls(event: AttackEvent): string {
+  const settings = getDifficultySettings(event, activeDifficultyId);
+  const visible = settings.visible !== false;
+  const countScale = settings.countScale ?? 1;
+  const warningTimeScale = settings.warningTimeScale ?? 1;
+
+  return `
+    <section class="property-group difficulty-property-group">
+      <h3>${difficultyLabels[activeDifficultyId]}</h3>
+      <div class="property-group-fields">
+        <label class="property-field property-checkbox-field">
+          <span title="現在選択中の難易度だけで、この攻撃を表示するかを切り替えます。">この難易度で表示</span>
+          <input data-difficulty-control="visible" type="checkbox" ${visible ? "checked" : ""} />
+        </label>
+        <label class="property-field">
+          <span title="現在選択中の難易度だけで、弾数や本数を倍率で増減します。">弾数倍率</span>
+          <input data-difficulty-control="countScale" type="number" min="0" max="5" step="0.05" value="${formatPropertyNumber(countScale)}" />
+        </label>
+        <label class="property-field">
+          <span title="現在選択中の難易度だけで、予告時間を倍率で増減します。">予告時間倍率</span>
+          <input data-difficulty-control="warningTimeScale" type="number" min="0" max="5" step="0.05" value="${formatPropertyNumber(warningTimeScale)}" />
+        </label>
+      </div>
+    </section>
   `;
 }
 
@@ -3367,7 +3693,7 @@ function renderPackageField(event: AttackPackageEvent, field: PackageFieldConfig
 }
 
 function renderPackageChildCard(event: AttackEvent): string {
-  const isVisible = isEventVisible(event);
+  const isVisible = isEventVisibleInActiveDifficulty(event);
   const isSelected = isSelectedEvent(event);
 
   return `
@@ -3610,7 +3936,7 @@ function renderTimelineMarkers(): void {
   for (const event of pattern.events.filter((patternEvent) => !patternEvent.packageId)) {
     const marker = document.createElement("button");
     const isMutedByEditMode = editorMode === "trajectory" && editingEventId !== null && event.id !== editingEventId;
-    const isVisible = isEventVisible(event);
+    const isVisible = isEventVisibleInActiveDifficulty(event);
     const laneIndex = getEventTimelineLane(event);
     const startRatio = clamp(event.startTime / pattern.duration, 0, 1);
     const endTime = getEventEndTime(event);
@@ -3963,6 +4289,9 @@ function ensureTimelineSettings(): void {
 }
 
 function ensurePatternEditorFields(): void {
+  pattern.activeDifficulty = isDifficultyId(pattern.activeDifficulty) ? pattern.activeDifficulty : activeDifficultyId;
+  activeDifficultyId = pattern.activeDifficulty;
+
   for (const event of pattern.events) {
     ensureEventEditorFields(event);
   }
@@ -3978,10 +4307,21 @@ function ensureEventEditorFields(event: AttackEvent): void {
   event.visible = event.visible !== false;
   delete (event as AttackEvent & { showTrajectory?: boolean }).showTrajectory;
   event.timelineLane = Math.max(0, Math.round(Number(event.timelineLane) || 0));
+  event.difficulty = normalizeDifficultySettings(event.difficulty);
 
   if (["movingBlock", "wallSweep", "beatPulseRing", "closingWalls", "safeLaneShift"].includes(event.kind)) {
     const warningEvent = event as AttackEvent & { warningAlpha?: number };
     warningEvent.warningAlpha = Number.isFinite(warningEvent.warningAlpha) ? warningEvent.warningAlpha : 0.72;
+  }
+
+  if (isAttackPackageEvent(event)) {
+    event.previewBulletTextureScale = clamp(Number(event.previewBulletTextureScale) || 1, 0.1, 5);
+  }
+
+  if (event.kind === "spawn_enemy_origin") {
+    event.enemyWarningTime = Number.isFinite(event.enemyWarningTime) ? Math.max(0, event.enemyWarningTime) : 0.55;
+    event.previewEnemyTextureScale = clamp(Number(event.previewEnemyTextureScale) || 1, 0.1, 5);
+    event.previewEnemyTexture = event.previewEnemyTexture?.dataUrl ? event.previewEnemyTexture : null;
   }
 }
 
@@ -4005,6 +4345,173 @@ function getEventTimelineLane(event: AttackEvent): number {
 
 function isEventVisible(event: AttackEvent): boolean {
   return event.visible !== false;
+}
+
+function isEventVisibleInActiveDifficulty(event: AttackEvent): boolean {
+  return isEventVisible(event) && getDifficultySettings(event, activeDifficultyId).visible !== false;
+}
+
+function isParentPackageVisibleInActiveDifficulty(event: AttackEvent): boolean {
+  const parent = getParentPackage(event);
+
+  return parent ? isEventVisibleInActiveDifficulty(parent) : true;
+}
+
+function isDifficultyId(value: unknown): value is DifficultyId {
+  return typeof value === "string" && difficultyIds.includes(value as DifficultyId);
+}
+
+function normalizeDifficultySettings(value: unknown): Partial<Record<DifficultyId, EventDifficultySettings>> {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const normalized: Partial<Record<DifficultyId, EventDifficultySettings>> = {};
+
+  for (const difficultyId of difficultyIds) {
+    const settings = value[difficultyId];
+
+    if (!isRecord(settings)) {
+      continue;
+    }
+
+    normalized[difficultyId] = {
+      visible: typeof settings.visible === "boolean" ? settings.visible : undefined,
+      countScale: normalizeScale(settings.countScale, 1),
+      warningTimeScale: normalizeScale(settings.warningTimeScale, 1),
+    };
+  }
+
+  return normalized;
+}
+
+function normalizeScale(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed) ? clamp(parsed, 0, 5) : fallback;
+}
+
+function getDifficultySettings(event: AttackEvent, difficultyId: DifficultyId): EventDifficultySettings {
+  return event.difficulty?.[difficultyId] ?? {};
+}
+
+function getCombinedDifficultySettings(event: AttackEvent, difficultyId: DifficultyId): Required<EventDifficultySettings> {
+  const parent = getParentPackage(event);
+  const parentSettings = parent ? getDifficultySettings(parent, difficultyId) : {};
+  const eventSettings = getDifficultySettings(event, difficultyId);
+
+  return {
+    visible: parentSettings.visible !== false && eventSettings.visible !== false,
+    countScale: clamp((parentSettings.countScale ?? 1) * (eventSettings.countScale ?? 1), 0, 5),
+    warningTimeScale: clamp((parentSettings.warningTimeScale ?? 1) * (eventSettings.warningTimeScale ?? 1), 0, 5),
+  };
+}
+
+function updateDifficultySettings(event: AttackEvent, difficultyId: DifficultyId, nextSettings: EventDifficultySettings): void {
+  event.difficulty = {
+    ...(event.difficulty ?? {}),
+    [difficultyId]: {
+      ...getDifficultySettings(event, difficultyId),
+      ...nextSettings,
+    },
+  };
+}
+
+function setDifficultyVisible(event: AttackEvent, visible: boolean): void {
+  event.visible = true;
+  updateDifficultySettings(event, activeDifficultyId, { visible });
+}
+
+function getDifficultyAdjustedEvent(event: AttackEvent): AttackEvent {
+  const adjusted = structuredClone(event) as AttackEvent;
+  const settings = getCombinedDifficultySettings(event, activeDifficultyId);
+
+  if (!settings.visible) {
+    adjusted.visible = false;
+  }
+
+  applyDifficultyScale(adjusted, settings.countScale, countDifficultyFields, true);
+  applyDifficultyScale(adjusted, settings.warningTimeScale, warningDifficultyFields, false);
+  if (adjusted.kind === "warningZone" && settings.warningTimeScale !== 1) {
+    const warningEndTime = adjusted.startTime + adjusted.duration;
+    adjusted.duration = Math.max(0.01, adjusted.duration * settings.warningTimeScale);
+    adjusted.startTime = Math.max(0, warningEndTime - adjusted.duration);
+  }
+  return adjusted;
+}
+
+function applyDifficultyScale(event: AttackEvent, scale: number, fields: readonly string[], integer: boolean): void {
+  if (scale === 1) {
+    return;
+  }
+
+  const record = event as unknown as Record<string, number>;
+
+  for (const field of fields) {
+    const value = record[field];
+
+    if (!Number.isFinite(value)) {
+      continue;
+    }
+
+    const scaled = value * scale;
+    record[field] = integer ? Math.max(1, Math.round(scaled)) : Math.max(0, scaled);
+  }
+}
+
+function getDifficultyAdjustedPattern(): BulletPattern {
+  return {
+    ...pattern,
+    activeDifficulty: activeDifficultyId,
+    events: pattern.events.map((event) => getDifficultyAdjustedEvent(event)),
+  };
+}
+
+function handleDifficultyControlInput(event: AttackEvent, input: HTMLInputElement | HTMLSelectElement): void {
+  const control = input.dataset.difficultyControl;
+  const settings = getDifficultySettings(event, activeDifficultyId);
+  let nextSettings: EventDifficultySettings | null = null;
+
+  if (control === "visible" && input instanceof HTMLInputElement) {
+    nextSettings = { visible: input.checked };
+  } else if (control === "countScale") {
+    const value = clamp(Number(input.value), 0, 5);
+
+    if (Number.isFinite(value)) {
+      nextSettings = { countScale: value };
+    }
+  } else if (control === "warningTimeScale") {
+    const value = clamp(Number(input.value), 0, 5);
+
+    if (Number.isFinite(value)) {
+      nextSettings = { warningTimeScale: value };
+    }
+  }
+
+  if (!nextSettings) {
+    return;
+  }
+
+  if ("visible" in nextSettings && nextSettings.visible === settings.visible) {
+    return;
+  }
+
+  if ("countScale" in nextSettings && nextSettings.countScale === settings.countScale) {
+    return;
+  }
+
+  if ("warningTimeScale" in nextSettings && nextSettings.warningTimeScale === settings.warningTimeScale) {
+    return;
+  }
+
+  pushHistory();
+  if (nextSettings.visible === true) {
+    event.visible = true;
+  }
+  updateDifficultySettings(event, activeDifficultyId, nextSettings);
+  previewEventWindows = null;
+  clearAimCache();
+  renderEverything();
 }
 
 function moveSelectedEventLane(delta: number): void {
@@ -4514,6 +5021,16 @@ function getPackageEventById(eventId: string | null): AttackPackageEvent | undef
   return pattern.events.find((event): event is AttackPackageEvent => event.id === eventId && isAttackPackageEvent(event));
 }
 
+function getSelectedEnemyEvent(): SpawnEnemyOriginEvent | undefined {
+  const selectedEvent = getSelectedEvent();
+
+  return selectedEvent?.kind === "spawn_enemy_origin" ? selectedEvent : undefined;
+}
+
+function getEnemyEventById(eventId: string | null): SpawnEnemyOriginEvent | undefined {
+  return pattern.events.find((event): event is SpawnEnemyOriginEvent => event.id === eventId && event.kind === "spawn_enemy_origin");
+}
+
 function getParentPackage(event: AttackEvent | undefined): AttackPackageEvent | undefined {
   if (!event?.packageId) {
     return undefined;
@@ -4577,12 +5094,6 @@ function ensurePackageChildren(): void {
     pattern.events.push(...generatedEvents);
     sortEvents();
   }
-}
-
-function isParentPackageVisible(event: AttackEvent): boolean {
-  const parent = getParentPackage(event);
-
-  return parent ? isEventVisible(parent) : true;
 }
 
 function allKinds(): AttackEventKind[] {
