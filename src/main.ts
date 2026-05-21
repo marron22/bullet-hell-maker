@@ -64,7 +64,7 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.18";
+const appVersion = "v0.19";
 let pattern = createStarterPattern();
 let activeDifficultyId: DifficultyId = pattern.activeDifficulty ?? "normal";
 const clock = new PlaybackClock();
@@ -1524,7 +1524,8 @@ function handlePackagePanelInput(event: Event): void {
 
     pushHistory();
     packageEvent.previewBulletTextureScale = nextScale;
-    renderEverything();
+    renderPreview();
+    syncUi();
     return;
   }
 
@@ -2390,20 +2391,29 @@ async function loadPackageBulletTexture(packageEvent: AttackPackageEvent, file: 
 }
 
 async function setPackageBulletTextureAsset(packageEvent: AttackPackageEvent, asset: PreviewImageAsset | null): Promise<void> {
-  if (asset?.dataUrl) {
-    await preview.loadBulletTexture(asset.dataUrl);
-  }
-
   pushHistory();
   packageEvent.previewBulletTexture = asset;
   packageEvent.previewBulletTextureScale = getPackageBulletTextureScale(packageEvent);
-  renderEverything();
+
+  if (asset?.dataUrl) {
+    void preview.loadBulletTexture(asset.dataUrl)
+      .then(() => renderPreview())
+      .catch((error) => {
+        console.warn("Package bullet texture could not be loaded for preview.", error);
+      });
+  }
+
+  renderPackagePanel();
+  renderPreview();
+  syncUi();
 }
 
 function clearPackageBulletTexture(packageEvent: AttackPackageEvent): void {
   pushHistory();
   packageEvent.previewBulletTexture = null;
-  renderEverything();
+  renderPackagePanel();
+  renderPreview();
+  syncUi();
 }
 
 async function loadEnemyPreviewTexture(enemyEvent: SpawnEnemyOriginEvent, file: File): Promise<void> {
@@ -2423,20 +2433,29 @@ async function loadEnemyPreviewTexture(enemyEvent: SpawnEnemyOriginEvent, file: 
 }
 
 async function setEnemyPreviewTextureAsset(enemyEvent: SpawnEnemyOriginEvent, asset: PreviewImageAsset | null): Promise<void> {
-  if (asset?.dataUrl) {
-    await preview.loadEnemyTexture(asset.dataUrl);
-  }
-
   pushHistory();
   enemyEvent.previewEnemyTexture = asset;
   enemyEvent.previewEnemyTextureScale = getEnemyTextureScale(enemyEvent);
-  renderEverything();
+
+  if (asset?.dataUrl) {
+    void preview.loadEnemyTexture(asset.dataUrl)
+      .then(() => renderPreview())
+      .catch((error) => {
+        console.warn("Enemy texture could not be loaded for preview.", error);
+      });
+  }
+
+  renderPropertyForm();
+  renderPreview();
+  syncUi();
 }
 
 function clearEnemyPreviewTexture(enemyEvent: SpawnEnemyOriginEvent): void {
   pushHistory();
   enemyEvent.previewEnemyTexture = null;
-  renderEverything();
+  renderPropertyForm();
+  renderPreview();
+  syncUi();
 }
 
 async function preloadPackageBulletTextures(): Promise<void> {
@@ -2963,7 +2982,13 @@ function handlePackageHandleDrag(handleId: string, point: { x: number; y: number
 
     applyEnemyHandlePoint(enemyEvent, handle.role, point);
     clearAimCache();
-    renderEverything();
+    if (phase === "move") {
+      renderPropertyForm();
+      renderPreview();
+      syncUi();
+    } else {
+      renderEverything();
+    }
     return;
   }
 
