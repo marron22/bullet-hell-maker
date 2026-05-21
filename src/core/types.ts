@@ -55,6 +55,12 @@ export interface StageSize {
   height: number;
 }
 
+export interface PreviewImageAsset {
+  name: string;
+  type: string;
+  dataUrl: string;
+}
+
 export interface BaseAttackEvent {
   id: string;
   kind: AttackEventKind;
@@ -74,6 +80,7 @@ export interface AttackPackageEvent extends BaseAttackEvent {
   packageType: AttackPackageKind;
   seed: number;
   generatedEventIds: string[];
+  previewBulletTexture?: PreviewImageAsset | null;
   packageCount: number;
   packageAngleWidth: number;
   packageStartAngle: number;

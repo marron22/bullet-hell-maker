@@ -21,7 +21,7 @@ import {
 import { createStarterPattern } from "./core/samplePattern";
 import { buildAttackFrame, clearAimCache } from "./core/simulation";
 import { PlaybackClock } from "./core/playback";
-import type { AttackEvent, AttackEventKind, AttackFrame, AttackPackageEvent, AttackPackageKind, BulletPattern, CurvedLaserRender, HazardRender, LaserRender, ShapeRender, TimelineSettings, WallRender } from "./core/types";
+import type { AttackEvent, AttackEventKind, AttackFrame, AttackPackageEvent, AttackPackageKind, BulletPattern, CurvedLaserRender, HazardRender, LaserRender, PreviewImageAsset, ShapeRender, TimelineSettings, WallRender } from "./core/types";
 import { buildUnitySeparatedExport } from "./core/unityExport";
 import { PreviewStage, type PackageHandleRender } from "./preview/PreviewStage";
 
@@ -38,14 +38,8 @@ interface ProjectCustomPackageAsset {
   code: string;
 }
 
-interface ProjectPreviewImageAsset {
-  name: string;
-  type: string;
-  dataUrl: string;
-}
-
 interface ProjectPreviewSettings {
-  bulletTexture?: ProjectPreviewImageAsset | null;
+  bulletTexture?: PreviewImageAsset | null;
 }
 
 type ProjectPatternFile = Partial<BulletPattern> & {
@@ -69,7 +63,7 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.13";
+const appVersion = "v0.14";
 let pattern = createStarterPattern();
 const clock = new PlaybackClock();
 let selectedEventId: string | null = pattern.events[0]?.id ?? null;
@@ -87,14 +81,13 @@ let copiedEvents: AttackEvent[] = [];
 let copiedEventsAnchorTime = 0;
 let copyStatusText = "";
 let projectMusicAsset: ProjectMusicAsset | null = null;
-let previewBulletTextureAsset: ProjectPreviewImageAsset | null = null;
 const projectCustomPackageAssets = new Map<string, ProjectCustomPackageAsset>();
 let timelineZoom = 1;
 let markerDragHistoryRecorded = false;
 let snapToMeasures = false;
 let propertyTimeMode: "seconds" | "beats" = "seconds";
 let editingEventId: string | null = null;
-let activeInspectorTab: "events" | "package" | "properties" | "music" | "preview" = "events";
+let activeInspectorTab: "events" | "package" | "properties" | "music" = "events";
 type EditorMode = "global" | "trajectory" | "preview";
 let editorMode: EditorMode = "global";
 let dashRequested = false;
@@ -109,6 +102,7 @@ let activeResizeTarget: "timeline" | "inspector" | null = null;
 let suppressNextPlayClick = false;
 let suppressNextResetClick = false;
 let activePackageHandleId: string | null = null;
+let packageTextureTargetId: string | null = null;
 let previewEventWindows: PreviewEventWindow[] | null = null;
 let lastPreviewWaveformRenderTime = 0;
 let previewLightweightEnabled = true;
@@ -541,7 +535,7 @@ appRoot.innerHTML = `
         <input id="import-input" type="file" accept="application/json,.json" hidden />
         <input id="ai-beatmap-input" type="file" accept="application/json,.json" hidden />
         <input id="package-code-input" type="file" accept=".mjs,text/javascript,application/javascript" hidden />
-        <input id="bullet-texture-input" type="file" accept="image/*" hidden />
+        <input id="package-bullet-texture-input" type="file" accept="image/*" hidden />
         <input id="music-input" type="file" accept="audio/*" hidden />
       </div>
       <div class="toolbar-spacer"></div>
@@ -557,7 +551,6 @@ appRoot.innerHTML = `
           <button class="inspector-tab-button is-active" type="button" data-inspector-tab="events" role="tab" aria-selected="true">${iconSvg("list")}<span>イベント</span></button>
           <button class="inspector-tab-button" type="button" data-inspector-tab="properties" role="tab" aria-selected="false">${iconSvg("sliders")}<span>プロパティ</span></button>
           <button class="inspector-tab-button" type="button" data-inspector-tab="music" role="tab" aria-selected="false">${iconSvg("music")}<span>音楽</span></button>
-          <button class="inspector-tab-button" type="button" data-inspector-tab="preview" role="tab" aria-selected="false">${iconSvg("image")}<span>プレビュー</span></button>
         </div>
         <section id="events-tab-panel" class="inspector-tab-panel" data-inspector-panel="events" role="tabpanel">
           <div id="event-list" class="event-list"></div>
@@ -577,18 +570,6 @@ appRoot.innerHTML = `
             <label><span title="${getPropertyTooltip("bpm")}">BPM</span><input id="bpm-input" type="number" min="1" max="400" step="0.1" /></label>
             <label><span title="${getPropertyTooltip("measureSeconds")}">measureSeconds</span><input id="measure-interval-input" type="number" min="0.05" max="120" step="0.01" /></label>
             <label><span title="${getPropertyTooltip("beatsPerMeasure")}">beatsPerMeasure</span><input id="beats-per-measure-input" type="number" min="1" max="16" step="1" /></label>
-          </div>
-        </section>
-        <section id="preview-tab-panel" class="inspector-tab-panel preview-settings-panel" data-inspector-panel="preview" role="tabpanel" hidden>
-          <div class="preview-texture-card">
-            <div>
-              <h3>弾テクスチャ</h3>
-              <p id="bullet-texture-display" class="preview-texture-display">No texture</p>
-            </div>
-            <div class="preview-texture-actions">
-              <button id="bullet-texture-button" class="music-load-button" type="button">${iconSvg("image")}<span>画像を読み込む</span></button>
-              <button id="clear-bullet-texture-button" class="danger-button" type="button">${iconSvg("trash")}<span>解除</span></button>
-            </div>
           </div>
         </section>
       </aside>
@@ -652,18 +633,15 @@ const importButton = requireElement<HTMLButtonElement>("#import-button");
 const importAiBeatmapButton = requireElement<HTMLButtonElement>("#import-ai-beatmap-button");
 const importPackageButton = requireElement<HTMLButtonElement>("#import-package-button");
 const musicButton = requireElement<HTMLButtonElement>("#music-button");
-const bulletTextureButton = requireElement<HTMLButtonElement>("#bullet-texture-button");
-const clearBulletTextureButton = requireElement<HTMLButtonElement>("#clear-bullet-texture-button");
 const undoButton = requireElement<HTMLButtonElement>("#undo-button");
 const redoButton = requireElement<HTMLButtonElement>("#redo-button");
 const importInput = requireElement<HTMLInputElement>("#import-input");
 const aiBeatmapInput = requireElement<HTMLInputElement>("#ai-beatmap-input");
 const packageCodeInput = requireElement<HTMLInputElement>("#package-code-input");
-const bulletTextureInput = requireElement<HTMLInputElement>("#bullet-texture-input");
+const packageBulletTextureInput = requireElement<HTMLInputElement>("#package-bullet-texture-input");
 const musicInput = requireElement<HTMLInputElement>("#music-input");
 const timeDisplay = requireElement<HTMLDivElement>("#time-display");
 const musicDisplay = requireElement<HTMLDivElement>("#music-display");
-const bulletTextureDisplay = requireElement<HTMLParagraphElement>("#bullet-texture-display");
 const eventList = requireElement<HTMLDivElement>("#event-list");
 const packagePanel = requireElement<HTMLDivElement>("#package-panel");
 const propertyForm = requireElement<HTMLFormElement>("#property-form");
@@ -723,7 +701,7 @@ inspectorTabButtons.forEach((button) => {
   button.addEventListener("click", () => {
     const nextTab = button.dataset.inspectorTab;
 
-    if (nextTab === "events" || nextTab === "package" || nextTab === "properties" || nextTab === "music" || nextTab === "preview") {
+    if (nextTab === "events" || nextTab === "package" || nextTab === "properties" || nextTab === "music") {
       activeInspectorTab = nextTab;
       renderInspectorTabs();
     }
@@ -911,23 +889,19 @@ packageCodeInput.addEventListener("change", () => {
   packageCodeInput.value = "";
 });
 
-bulletTextureButton.addEventListener("click", () => {
-  bulletTextureInput.click();
-});
+packageBulletTextureInput.addEventListener("change", () => {
+  const file = packageBulletTextureInput.files?.[0];
+  const packageEvent = getPackageEventById(packageTextureTargetId) ?? getSelectedPackageEvent();
 
-clearBulletTextureButton.addEventListener("click", () => {
-  clearPreviewBulletTexture();
-});
-
-bulletTextureInput.addEventListener("change", () => {
-  const file = bulletTextureInput.files?.[0];
-
-  if (!file) {
+  if (!file || !packageEvent) {
+    packageBulletTextureInput.value = "";
+    packageTextureTargetId = null;
     return;
   }
 
-  void loadPreviewBulletTexture(file);
-  bulletTextureInput.value = "";
+  void loadPackageBulletTexture(packageEvent, file);
+  packageBulletTextureInput.value = "";
+  packageTextureTargetId = null;
 });
 
 musicInput.addEventListener("change", () => {
@@ -1333,6 +1307,24 @@ function handlePackagePanelClick(event: MouseEvent): void {
     return;
   }
 
+  const textureButton = target.closest<HTMLButtonElement>("[data-package-texture-action]");
+
+  if (textureButton) {
+    const packageEvent = getSelectedPackageEvent();
+
+    if (!packageEvent) {
+      return;
+    }
+
+    if (textureButton.dataset.packageTextureAction === "load") {
+      packageTextureTargetId = packageEvent.id;
+      packageBulletTextureInput.click();
+    } else if (textureButton.dataset.packageTextureAction === "clear") {
+      clearPackageBulletTexture(packageEvent);
+    }
+    return;
+  }
+
   const visibilityButton = target.closest<HTMLButtonElement>("[data-package-child-visibility]");
 
   if (visibilityButton) {
@@ -1569,9 +1561,6 @@ function exportProjectPattern(): void {
         }
       : null,
     customPackages: getProjectCustomPackageAssets(),
-    preview: {
-      bulletTexture: previewBulletTextureAsset,
-    },
   };
 
   downloadJson(projectPattern, `${pattern.title.replace(/[^\w-]+/g, "_") || "danmaku_project"}.project.json`);
@@ -1640,12 +1629,8 @@ async function importPattern(file: File): Promise<void> {
     } else {
       clearMusic();
     }
-    try {
-      await setPreviewBulletTextureAsset(parsed.preview?.bulletTexture ?? null);
-    } catch (error) {
-      console.warn("Preview bullet texture could not be restored.", error);
-      await setPreviewBulletTextureAsset(null);
-    }
+    migrateLegacyPreviewBulletTexture(parsed.preview?.bulletTexture ?? null);
+    await preloadPackageBulletTextures();
 
     selectSingleEvent(pattern.events[0]?.id ?? null);
     editingEventId = null;
@@ -2030,7 +2015,7 @@ async function loadMusicFromProjectAsset(asset: ProjectMusicAsset): Promise<void
   musicVolumeInput.value = String(Math.round(audio.volume * 100));
 }
 
-async function loadPreviewBulletTexture(file: File): Promise<void> {
+async function loadPackageBulletTexture(packageEvent: AttackPackageEvent, file: File): Promise<void> {
   if (!file.type.startsWith("image/")) {
     window.alert("画像ファイルを選択してください。");
     return;
@@ -2039,22 +2024,62 @@ async function loadPreviewBulletTexture(file: File): Promise<void> {
   try {
     const asset = await buildProjectImageAsset(file);
 
-    await setPreviewBulletTextureAsset(asset);
+    await setPackageBulletTextureAsset(packageEvent, asset);
   } catch (error) {
     console.error(error);
     window.alert("弾テクスチャを読み込めませんでした。別の画像を試してください。");
   }
 }
 
-async function setPreviewBulletTextureAsset(asset: ProjectPreviewImageAsset | null): Promise<void> {
-  previewBulletTextureAsset = asset;
-  await preview.setBulletTexture(asset?.dataUrl ?? null);
-  syncPreviewSettingsPanel();
-  renderPreview();
+async function setPackageBulletTextureAsset(packageEvent: AttackPackageEvent, asset: PreviewImageAsset | null): Promise<void> {
+  if (asset?.dataUrl) {
+    await preview.loadBulletTexture(asset.dataUrl);
+  }
+
+  pushHistory();
+  packageEvent.previewBulletTexture = asset;
+  renderEverything();
 }
 
-function clearPreviewBulletTexture(): void {
-  void setPreviewBulletTextureAsset(null);
+function clearPackageBulletTexture(packageEvent: AttackPackageEvent): void {
+  pushHistory();
+  packageEvent.previewBulletTexture = null;
+  renderEverything();
+}
+
+async function preloadPackageBulletTextures(): Promise<void> {
+  const dataUrls = new Set<string>();
+
+  for (const event of pattern.events) {
+    if (isAttackPackageEvent(event) && event.previewBulletTexture?.dataUrl) {
+      dataUrls.add(event.previewBulletTexture.dataUrl);
+    }
+  }
+
+  await Promise.all([...dataUrls].map(async (dataUrl) => {
+    try {
+      await preview.loadBulletTexture(dataUrl);
+    } catch (error) {
+      console.warn("Package bullet texture could not be restored.", error);
+    }
+  }));
+}
+
+function migrateLegacyPreviewBulletTexture(asset: PreviewImageAsset | null): void {
+  if (!asset?.dataUrl) {
+    return;
+  }
+
+  const packageEvents = pattern.events.filter(isAttackPackageEvent);
+  const hasPackageTexture = packageEvents.some((event) => event.previewBulletTexture?.dataUrl);
+
+  if (hasPackageTexture) {
+    return;
+  }
+
+  for (const packageEvent of packageEvents) {
+    packageEvent.previewBulletTexture = asset;
+  }
 }
 
 function clearMusic(): void {
@@ -2075,7 +2100,7 @@ function clearMusic(): void {
   renderWaveform();
 }
 
-function buildProjectImageAsset(file: File): Promise<ProjectPreviewImageAsset> {
+function buildProjectImageAsset(file: File): Promise<PreviewImageAsset> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
 
@@ -2268,6 +2293,7 @@ function renderPreview(): void {
     currentTime: clock.time,
     duration: pattern.duration,
     events: previewEvents,
+    bulletTexturesByEventId: buildPreviewBulletTextureMap(previewEvents),
     selectedEventId,
     editEventId: editingEventId,
     trajectories: buildVisibleTrajectories(),
@@ -2276,6 +2302,21 @@ function renderPreview(): void {
     activePackageHandleId: packageHandles.some((handle) => handle.id === activePackageHandleId) ? activePackageHandleId : null,
     lightweight: editorMode === "preview" && previewLightweightEnabled,
   });
+}
+
+function buildPreviewBulletTextureMap(events: AttackEvent[]): Map<string, string> {
+  const texturesByEventId = new Map<string, string>();
+
+  for (const event of events) {
+    const parentPackage = getParentPackage(event);
+    const dataUrl = parentPackage?.previewBulletTexture?.dataUrl;
+
+    if (dataUrl) {
+      texturesByEventId.set(event.id, dataUrl);
+    }
+  }
+
+  return texturesByEventId;
 }
 
 function getPreviewEvents(currentTime = clock.time): AttackEvent[] {
@@ -2779,17 +2820,8 @@ function syncUi(): void {
   syncPlaybackButton();
   syncHistoryButtons();
   syncSnapButton();
-  syncPreviewSettingsPanel();
   addTimelineLaneButton.disabled = getTimelineLaneCount() >= maximumTimelineLaneCount;
   musicDisplay.classList.toggle("has-music", hasMusic());
-}
-
-function syncPreviewSettingsPanel(): void {
-  const hasTexture = Boolean(previewBulletTextureAsset);
-
-  bulletTextureDisplay.textContent = previewBulletTextureAsset?.name ?? "No texture";
-  bulletTextureDisplay.classList.toggle("has-texture", hasTexture);
-  clearBulletTextureButton.disabled = !hasTexture;
 }
 
 function syncPreviewOptionButtons(isPreviewMode: boolean): void {
@@ -3193,10 +3225,29 @@ function renderPackagePanel(): void {
         ${fields.map((field) => renderPackageField(packageEvent, field)).join("")}
       </div>
     </div>
+    ${renderPackageTextureCard(packageEvent)}
     <div class="property-group">
       <h3>Generated Attacks</h3>
       <div class="package-child-list">
         ${childEvents.map((child) => renderPackageChildCard(child)).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderPackageTextureCard(packageEvent: AttackPackageEvent): string {
+  const asset = packageEvent.previewBulletTexture;
+  const hasTexture = Boolean(asset?.dataUrl);
+
+  return `
+    <div class="preview-texture-card package-texture-card">
+      <div>
+        <h3>弾テクスチャ</h3>
+        <p class="preview-texture-display ${hasTexture ? "has-texture" : ""}">${escapeHtml(asset?.name ?? "No texture")}</p>
+      </div>
+      <div class="preview-texture-actions">
+        <button class="music-load-button" type="button" data-package-texture-action="load">${iconSvg("image")}<span>画像を読み込む</span></button>
+        <button class="danger-button" type="button" data-package-texture-action="clear" ${hasTexture ? "" : "disabled"}>${iconSvg("trash")}<span>解除</span></button>
       </div>
     </div>
   `;
@@ -4457,6 +4508,10 @@ function getSelectedPackageEvent(): AttackPackageEvent | undefined {
   const selectedEvent = getSelectedEvent();
 
   return isAttackPackageEvent(selectedEvent) ? selectedEvent : getParentPackage(selectedEvent);
+}
+
+function getPackageEventById(eventId: string | null): AttackPackageEvent | undefined {
+  return pattern.events.find((event): event is AttackPackageEvent => event.id === eventId && isAttackPackageEvent(event));
 }
 
 function getParentPackage(event: AttackEvent | undefined): AttackPackageEvent | undefined {

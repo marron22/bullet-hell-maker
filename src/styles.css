@@ -522,16 +522,24 @@ button:disabled {
   border-color: transparent;
   color: #bdbdbd;
   display: inline-flex;
-  font-size: 12px;
-  gap: 5px;
+  font-size: 11px;
+  gap: 3px;
   justify-content: center;
   min-width: 0;
-  padding: 0 6px;
+  padding: 0 4px;
 }
 
 .inspector-tab-button .icon {
   height: 14px;
+  flex: 0 0 auto;
   width: 14px;
+}
+
+.inspector-tab-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .inspector-tab-button.is-active {
@@ -574,8 +582,7 @@ button:disabled {
   overflow-y: auto;
 }
 
-.music-panel > *,
-.preview-settings-panel > * {
+.music-panel > * {
   min-width: 0;
 }
 
@@ -583,11 +590,6 @@ button:disabled {
   max-width: none;
   padding: 7px 9px;
   width: 100%;
-}
-
-.preview-settings-panel {
-  align-content: start;
-  overflow-y: auto;
 }
 
 .preview-texture-card {

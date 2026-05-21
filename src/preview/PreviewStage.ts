@@ -7,6 +7,7 @@ interface PreviewRenderState {
   currentTime: number;
   duration: number;
   events: AttackEvent[];
+  bulletTexturesByEventId?: ReadonlyMap<string, string>;
   selectedEventId?: string | null;
   editEventId?: string | null;
   trajectories?: TrajectoryRender[];
@@ -51,7 +52,7 @@ export class PreviewStage {
   private draggingPackageHandleId: string | null = null;
   private eventLayerHasContent = false;
   private trajectoryLayerHasContent = false;
-  private bulletTexture: Texture | null = null;
+  private readonly bulletTextureCache = new Map<string, Texture>();
   private readonly bulletTextureSprites: Sprite[] = [];
   private packageHandleDragCallback?: (handleId: string, point: { x: number; y: number }, phase: PackageHandleDragPhase) => void;
 
@@ -194,18 +195,12 @@ export class PreviewStage {
     this.hitEffectPosition = { ...this.playerPosition };
   }
 
-  async setBulletTexture(dataUrl: string | null): Promise<void> {
-    if (!dataUrl) {
-      this.bulletTexture = null;
-      this.hideBulletTextureSprites(0);
+  async loadBulletTexture(dataUrl: string | null): Promise<void> {
+    if (!dataUrl || this.bulletTextureCache.has(dataUrl)) {
       return;
     }
 
-    this.bulletTexture = await Assets.load<Texture>(dataUrl);
-
-    for (const sprite of this.bulletTextureSprites) {
-      sprite.texture = this.bulletTexture;
-    }
+    this.bulletTextureCache.set(dataUrl, await Assets.load<Texture>(dataUrl));
   }
 
   render(state: PreviewRenderState): void {
@@ -224,7 +219,7 @@ export class PreviewStage {
       this.trajectoryLayerHasContent = trajectories.length > 0;
     }
 
-    this.drawAttackFrame(state.frame);
+    this.drawAttackFrame(state.frame, state.bulletTexturesByEventId);
     this.drawHitEffect();
     this.drawPlayer(state.playerAlpha ?? 1);
   }
@@ -310,7 +305,7 @@ export class PreviewStage {
     }
   }
 
-  private drawAttackFrame(frame: AttackFrame): void {
+  private drawAttackFrame(frame: AttackFrame, bulletTexturesByEventId?: ReadonlyMap<string, string>): void {
     this.attackLayer.clear();
     let texturedBulletCount = 0;
 
@@ -346,8 +341,11 @@ export class PreviewStage {
     }
 
     for (const bullet of frame.bullets) {
-      if (this.bulletTexture && getVisualPresetFromTypeId(bullet.typeId) === "bullet") {
-        texturedBulletCount = this.drawTexturedBullet(bullet, texturedBulletCount);
+      const textureDataUrl = bulletTexturesByEventId?.get(bullet.eventId);
+      const bulletTexture = textureDataUrl ? this.bulletTextureCache.get(textureDataUrl) : undefined;
+
+      if (bulletTexture && getVisualPresetFromTypeId(bullet.typeId) === "bullet") {
+        texturedBulletCount = this.drawTexturedBullet(bullet, texturedBulletCount, bulletTexture);
         continue;
       }
 
@@ -593,15 +591,15 @@ export class PreviewStage {
     });
   }
 
-  private drawTexturedBullet(bullet: BulletRender, index: number): number {
-    if (!this.bulletTexture || this.isCircleOutsideStage(bullet.x, bullet.y, bullet.radius)) {
+  private drawTexturedBullet(bullet: BulletRender, index: number, texture: Texture): number {
+    if (this.isCircleOutsideStage(bullet.x, bullet.y, bullet.radius)) {
       return index;
     }
 
-    const sprite = this.getBulletTextureSprite(index);
+    const sprite = this.getBulletTextureSprite(index, texture);
     const size = Math.max(1, bullet.radius * 2);
 
-    sprite.texture = this.bulletTexture;
+    sprite.texture = texture;
     sprite.visible = true;
     sprite.alpha = bullet.alpha;
     sprite.rotation = bullet.angle ?? 0;
@@ -611,14 +609,14 @@ export class PreviewStage {
     return index + 1;
   }
 
-  private getBulletTextureSprite(index: number): Sprite {
+  private getBulletTextureSprite(index: number, texture: Texture): Sprite {
     const existing = this.bulletTextureSprites[index];
 
     if (existing) {
       return existing;
     }
 
-    const sprite = new Sprite(this.bulletTexture ?? undefined);
+    const sprite = new Sprite(texture);
 
     sprite.anchor.set(0.5);
     this.bulletTextureLayer.addChild(sprite);
