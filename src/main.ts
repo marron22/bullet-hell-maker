@@ -52,7 +52,7 @@ type AiBeatmapDraftFile = {
   events?: unknown[];
 };
 
-const appVersion = "v0.7";
+const appVersion = "v0.8";
 let pattern = createStarterPattern();
 const clock = new PlaybackClock();
 let selectedEventId: string | null = pattern.events[0]?.id ?? null;
