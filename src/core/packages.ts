@@ -275,6 +275,9 @@ export const packageFieldConfigs: PackageFieldConfig[] = [
   field("packageBombSize", "bombSize", [
     "package_bomb_burst",
   ], 4, 400, 1),
+  field("packageBulletSize", "bulletSize", [
+    "package_bomb_burst",
+  ], 1, 120, 1),
   field("packageSpeed", "speed", [
     "package_random_barrage",
     "package_bomb_burst",
@@ -544,6 +547,7 @@ export function createAttackPackageEvent(kind: AttackPackageKind, startTime: num
     packageSplitDuration: 2.2,
     packageFuseTime: 1.2,
     packageBulletCount: 18,
+    packageBulletSize: 8,
     packageSpeed: 260,
     packageSplitSpeed: 260,
     packageSplitStartAngle: 0,
@@ -694,6 +698,7 @@ function applyPackageDefaults(pkg: AttackPackageEvent, stage: StageSize): void {
       pkg.packageFuseTime = 1.15;
       pkg.packageSpeed = 280;
       pkg.packageBombSize = 42;
+      pkg.packageBulletSize = 8;
       pkg.packageStartX = -80;
       pkg.packageStartY = stage.height * 0.5;
       break;
@@ -954,7 +959,7 @@ function buildBombBurst(pkg: AttackPackageEvent, stage: StageSize): AttackEvent[
   burst.radialInterval = 0;
   burst.radialStartAngle = randomRange(pkg.seed + 17, -180, 180);
   burst.pathSpeed = pkg.packageSpeed;
-  setBulletVisual(burst, 0, 8);
+  setBulletVisual(burst, 0, pkg.packageBulletSize);
 
   return [bomb, burst];
 }

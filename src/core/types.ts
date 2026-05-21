@@ -94,6 +94,7 @@ export interface AttackPackageEvent extends BaseAttackEvent {
   packageSplitDuration: number;
   packageFuseTime: number;
   packageBulletCount: number;
+  packageBulletSize: number;
   packageSpeed: number;
   packageSplitSpeed: number;
   packageSplitStartAngle: number;

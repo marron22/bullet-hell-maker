@@ -52,7 +52,7 @@ type AiBeatmapDraftFile = {
   events?: unknown[];
 };
 
-const appVersion = "v0.6";
+const appVersion = "v0.7";
 let pattern = createStarterPattern();
 const clock = new PlaybackClock();
 let selectedEventId: string | null = pattern.events[0]?.id ?? null;
@@ -3052,6 +3052,7 @@ function getPropertyDescription(name: string): string {
       packageSplitDuration: "分裂後に発射された弾が消えるまでの時間です。",
       packageFuseTime: "ボムが出現してから破裂するまでの時間です。",
       packageBulletCount: "一度に放つ弾の数です。分裂ラグ円形弾では各消滅位置から再発射する弾数です。",
+      packageBulletSize: "ボム破裂弾で破裂後に飛ぶ弾の大きさです。",
       packageBombSize: "ボム本体として飛んでくる円の大きさです。",
       packageSpeed: "生成される弾やバーの移動速度です。",
       packageSplitSpeed: "分裂後に発射された弾の移動速度です。",

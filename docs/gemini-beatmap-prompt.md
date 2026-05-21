@@ -103,7 +103,7 @@ package_sequential_lasers
 - エリア系: packageWidth, packageHeight, packageSize
 - レーザー/バー: packageLength, packageThickness, packageOrientation, packageMoveDirectionDeg, packageInitialPosition
 - 角度系: packageStartAngle, packageAngleWidth, packageDirectionDeg, packageRotationSpeed
-- ボム: packageStartX, packageStartY, packageBombSize, packageFuseTime, packageBulletCount
+- ボム: packageStartX, packageStartY, packageBombSize, packageFuseTime, packageBulletCount, packageBulletSize
 - スネーク: packageSpacing, packagePolynomialA, packagePolynomialB, packagePolynomialC, packagePolynomialD
 
 JSON例:
