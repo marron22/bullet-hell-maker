@@ -58,7 +58,7 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.10";
+const appVersion = "v0.11";
 let pattern = createStarterPattern();
 const clock = new PlaybackClock();
 let selectedEventId: string | null = pattern.events[0]?.id ?? null;
@@ -99,6 +99,8 @@ let suppressNextResetClick = false;
 let activePackageHandleId: string | null = null;
 let previewEventWindows: PreviewEventWindow[] | null = null;
 let lastPreviewWaveformRenderTime = 0;
+let previewLightweightEnabled = true;
+let previewTimelineVisible = true;
 
 const defaultMusicVolume = 0.8;
 const audio = new Audio();
@@ -500,6 +502,10 @@ appRoot.innerHTML = `
         <button class="mode-toggle-button" type="button" data-editor-mode="trajectory">軌跡編集</button>
         <button class="mode-toggle-button" type="button" data-editor-mode="preview">プレビュー</button>
       </div>
+      <div class="preview-options" aria-label="プレビュー設定">
+        <button id="preview-lightweight-toggle-button" class="preview-option-button is-active" type="button" aria-pressed="true" title="プレビューの軽量化">${iconSvg("pulse")}<span>軽量</span></button>
+        <button id="preview-timeline-toggle-button" class="preview-option-button is-active" type="button" aria-pressed="true" title="タイムライン表示">${iconSvg("eye")}<span>タイムライン</span></button>
+      </div>
       <div class="hidden-inputs">
         <input id="import-input" type="file" accept="application/json,.json" hidden />
         <input id="ai-beatmap-input" type="file" accept="application/json,.json" hidden />
@@ -593,6 +599,8 @@ const trajectoryModeNotice = requireElement<HTMLDivElement>("#trajectory-mode-no
 const appShell = requireElement<HTMLDivElement>(".app-shell");
 const playButton = requireElement<HTMLButtonElement>("#play-button");
 const resetButton = requireElement<HTMLButtonElement>("#reset-button");
+const previewLightweightToggleButton = requireElement<HTMLButtonElement>("#preview-lightweight-toggle-button");
+const previewTimelineToggleButton = requireElement<HTMLButtonElement>("#preview-timeline-toggle-button");
 const exportButton = requireElement<HTMLButtonElement>("#export-button");
 const exportUnityButton = requireElement<HTMLButtonElement>("#export-unity-button");
 const importButton = requireElement<HTMLButtonElement>("#import-button");
@@ -681,6 +689,26 @@ editorModeButtons.forEach((button) => {
       setEditorMode(mode);
     }
   });
+});
+
+previewLightweightToggleButton.addEventListener("click", () => {
+  previewLightweightEnabled = !previewLightweightEnabled;
+  invalidatePreviewRenderCache();
+  syncUi();
+  renderPreview();
+  renderWaveformForTick();
+});
+
+previewTimelineToggleButton.addEventListener("click", () => {
+  previewTimelineVisible = !previewTimelineVisible;
+  syncUi();
+  resizePreviewHost();
+  renderPreview();
+
+  if (previewTimelineVisible) {
+    resizeTimelineToViewport();
+    renderWaveform();
+  }
 });
 
 document.addEventListener("click", (event) => {
@@ -2113,7 +2141,7 @@ function renderPreview(): void {
     playerAlpha: dashTimeRemaining > 0 ? 0.45 : 1,
     packageHandles,
     activePackageHandleId: packageHandles.some((handle) => handle.id === activePackageHandleId) ? activePackageHandleId : null,
-    lightweight: editorMode === "preview",
+    lightweight: editorMode === "preview" && previewLightweightEnabled,
   });
 }
 
@@ -2124,7 +2152,7 @@ function getPreviewEvents(currentTime = clock.time): AttackEvent[] {
     return editingEvent && isPreviewRenderableEvent(editingEvent) ? [editingEvent] : [];
   }
 
-  if (editorMode !== "preview") {
+  if (editorMode !== "preview" || !previewLightweightEnabled) {
     return pattern.events.filter(isPreviewRenderableEvent);
   }
 
@@ -2601,7 +2629,9 @@ function degreesToRadians(degrees: number): number {
 }
 
 function syncUi(): void {
-  appShell.classList.toggle("is-preview-mode", editorMode === "preview");
+  const isPreviewMode = editorMode === "preview";
+  appShell.classList.toggle("is-preview-mode", isPreviewMode);
+  appShell.classList.toggle("is-preview-timeline-hidden", isPreviewMode && !previewTimelineVisible);
   for (const button of editorModeButtons) {
     const isActive = button.dataset.editorMode === editorMode;
 
@@ -2609,6 +2639,7 @@ function syncUi(): void {
     button.setAttribute("aria-pressed", String(isActive));
   }
 
+  syncPreviewOptionButtons(isPreviewMode);
   timeDisplay.textContent = `${clock.time.toFixed(2)}s / ${pattern.duration.toFixed(2)}s`;
   timelinePlayhead.style.left = `${(clock.time / pattern.duration) * 100}%`;
   syncPlaybackButton();
@@ -2616,6 +2647,17 @@ function syncUi(): void {
   syncSnapButton();
   addTimelineLaneButton.disabled = getTimelineLaneCount() >= maximumTimelineLaneCount;
   musicDisplay.classList.toggle("has-music", hasMusic());
+}
+
+function syncPreviewOptionButtons(isPreviewMode: boolean): void {
+  previewLightweightToggleButton.disabled = !isPreviewMode;
+  previewTimelineToggleButton.disabled = !isPreviewMode;
+  previewLightweightToggleButton.classList.toggle("is-active", previewLightweightEnabled);
+  previewTimelineToggleButton.classList.toggle("is-active", previewTimelineVisible);
+  previewLightweightToggleButton.setAttribute("aria-pressed", String(previewLightweightEnabled));
+  previewTimelineToggleButton.setAttribute("aria-pressed", String(previewTimelineVisible));
+  previewLightweightToggleButton.title = previewLightweightEnabled ? "軽量化オン" : "軽量化オフ";
+  previewTimelineToggleButton.title = previewTimelineVisible ? "タイムライン表示オン" : "タイムライン表示オフ";
 }
 
 function syncLayoutSizeVariables(): void {
@@ -4011,7 +4053,11 @@ function renderWaveform(): void {
 }
 
 function renderWaveformForTick(): void {
-  if (editorMode !== "preview") {
+  if (editorMode === "preview" && !previewTimelineVisible) {
+    return;
+  }
+
+  if (editorMode !== "preview" || !previewLightweightEnabled) {
     renderWaveform();
     return;
   }

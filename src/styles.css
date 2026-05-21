@@ -234,6 +234,31 @@ button:disabled {
   color: #070707;
 }
 
+.preview-options {
+  align-items: center;
+  border-left: 1px solid #303030;
+  display: none;
+  gap: 6px;
+  margin-left: 2px;
+  padding-left: 10px;
+}
+
+.preview-option-button {
+  align-items: center;
+  background: #121212;
+  color: #a9a9a9;
+  display: inline-flex;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 9px;
+}
+
+.preview-option-button.is-active {
+  background: #f1f1f1;
+  border-color: #ffffff;
+  color: #070707;
+}
+
 .menu-popover {
   background: #101010;
   border: 1px solid #3a3a3a;
@@ -431,6 +456,14 @@ button:disabled {
   grid-template-rows: 48px minmax(0, 1fr) var(--timeline-height, 220px);
 }
 
+.app-shell.is-preview-mode .preview-options {
+  display: inline-flex;
+}
+
+.app-shell.is-preview-mode.is-preview-timeline-hidden {
+  grid-template-rows: 48px minmax(0, 1fr) 0;
+}
+
 .app-shell.is-preview-mode .workspace {
   gap: 0;
   grid-template-columns: minmax(0, 1fr);
@@ -451,6 +484,10 @@ button:disabled {
 .app-shell.is-preview-mode .timeline-panel {
   border-radius: 0;
   margin: 0;
+}
+
+.app-shell.is-preview-mode.is-preview-timeline-hidden .timeline-panel {
+  display: none;
 }
 
 .app-shell.is-preview-mode .preview-canvas {
