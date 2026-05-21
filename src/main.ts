@@ -64,7 +64,7 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.19";
+const appVersion = "v0.20";
 let pattern = createStarterPattern();
 let activeDifficultyId: DifficultyId = pattern.activeDifficulty ?? "normal";
 const clock = new PlaybackClock();
@@ -315,6 +315,7 @@ const numberFieldConfigs: NumberFieldConfig[] = [
   { name: "enemyEnterTime", label: "出現時間", min: 0.01, max: 5, step: 0.05, kinds: ["spawn_enemy_origin"] },
   { name: "enemyExitTime", label: "消える時間", min: 0.01, max: 5, step: 0.05, kinds: ["spawn_enemy_origin"] },
   { name: "previewEnemyTextureScale", label: "敵テクスチャ倍率", min: 0.1, max: 5, step: 0.05, kinds: ["spawn_enemy_origin"] },
+  { name: "previewEnemyTextureAngle", label: "敵テクスチャ角度", min: -720, max: 720, step: 5, kinds: ["spawn_enemy_origin"] },
   { name: "laserCount", label: "レーザー本数", min: 1, max: 64, step: 1, integer: true, kinds: ["spawn_curved_laser"] },
   { name: "laserAngleStepDeg", label: "レーザー角度間隔", min: -360, max: 360, step: 1, kinds: ["spawn_curved_laser"] },
   { name: "laserWidth", label: "レーザー幅", min: 1, max: 200, step: 1, kinds: ["spawn_curved_laser"] },
@@ -521,6 +522,7 @@ const propertyDescriptions: Record<string, string> = {
   enemyExitTime: "敵がひゅんと小さくなって消える時間です。",
   originSize: "敵プレビューの基準サイズです。",
   previewEnemyTextureScale: "敵テクスチャをプレビューで表示するときの倍率です。",
+  previewEnemyTextureAngle: "敵テクスチャだけに加える表示角度です。",
   color: "プレビューとタイムラインで使う攻撃色です。",
   musicOffset: "音楽グリッドの開始位置です。曲の拍と線を合わせるために使います。",
   bpm: "1分あたりの拍数です。変更すると1小節の時間も更新されます。",
@@ -1524,6 +1526,20 @@ function handlePackagePanelInput(event: Event): void {
 
     pushHistory();
     packageEvent.previewBulletTextureScale = nextScale;
+    renderPreview();
+    syncUi();
+    return;
+  }
+
+  if (input.name === "previewBulletTextureAngle" && input instanceof HTMLInputElement) {
+    const nextAngle = clamp(Number(input.value), -720, 720);
+
+    if (!Number.isFinite(nextAngle) || nextAngle === getPackageBulletTextureAngle(packageEvent)) {
+      return;
+    }
+
+    pushHistory();
+    packageEvent.previewBulletTextureAngle = nextAngle;
     renderPreview();
     syncUi();
     return;
@@ -2724,8 +2740,8 @@ function renderPreview(): void {
   });
 }
 
-function buildPreviewBulletTextureMap(events: AttackEvent[]): Map<string, { dataUrl: string; scale: number }> {
-  const texturesByEventId = new Map<string, { dataUrl: string; scale: number }>();
+function buildPreviewBulletTextureMap(events: AttackEvent[]): Map<string, { dataUrl: string; scale: number; angleDeg: number }> {
+  const texturesByEventId = new Map<string, { dataUrl: string; scale: number; angleDeg: number }>();
 
   for (const event of events) {
     const parentPackage = getParentPackage(event);
@@ -2735,6 +2751,7 @@ function buildPreviewBulletTextureMap(events: AttackEvent[]): Map<string, { data
       texturesByEventId.set(event.id, {
         dataUrl,
         scale: getPackageBulletTextureScale(parentPackage),
+        angleDeg: getPackageBulletTextureAngle(parentPackage),
       });
     }
   }
@@ -2742,14 +2759,15 @@ function buildPreviewBulletTextureMap(events: AttackEvent[]): Map<string, { data
   return texturesByEventId;
 }
 
-function buildPreviewEnemyTextureMap(events: AttackEvent[]): Map<string, { dataUrl: string; scale: number }> {
-  const texturesByEventId = new Map<string, { dataUrl: string; scale: number }>();
+function buildPreviewEnemyTextureMap(events: AttackEvent[]): Map<string, { dataUrl: string; scale: number; angleDeg: number }> {
+  const texturesByEventId = new Map<string, { dataUrl: string; scale: number; angleDeg: number }>();
 
   for (const event of events) {
     if (event.kind === "spawn_enemy_origin" && event.previewEnemyTexture?.dataUrl) {
       texturesByEventId.set(event.id, {
         dataUrl: event.previewEnemyTexture.dataUrl,
         scale: getEnemyTextureScale(event),
+        angleDeg: getEnemyTextureAngle(event),
       });
     }
   }
@@ -2761,8 +2779,20 @@ function getPackageBulletTextureScale(packageEvent: AttackPackageEvent): number 
   return clamp(Number(packageEvent.previewBulletTextureScale) || 1, 0.1, 5);
 }
 
+function getPackageBulletTextureAngle(packageEvent: AttackPackageEvent): number {
+  const angle = Number(packageEvent.previewBulletTextureAngle);
+
+  return Number.isFinite(angle) ? clamp(angle, -720, 720) : 0;
+}
+
 function getEnemyTextureScale(enemyEvent: SpawnEnemyOriginEvent): number {
   return clamp(Number(enemyEvent.previewEnemyTextureScale) || 1, 0.1, 5);
+}
+
+function getEnemyTextureAngle(enemyEvent: SpawnEnemyOriginEvent): number {
+  const angle = Number(enemyEvent.previewEnemyTextureAngle);
+
+  return Number.isFinite(angle) ? clamp(angle, -720, 720) : 0;
 }
 
 function getPreviewEvents(currentTime = clock.time): AttackEvent[] {
@@ -3908,6 +3938,7 @@ function renderPackageTextureCard(packageEvent: AttackPackageEvent): string {
   const asset = packageEvent.previewBulletTexture;
   const hasTexture = Boolean(asset?.dataUrl);
   const textureScale = getPackageBulletTextureScale(packageEvent);
+  const textureAngle = getPackageBulletTextureAngle(packageEvent);
 
   return `
     <div class="preview-texture-card package-texture-card">
@@ -3918,6 +3949,10 @@ function renderPackageTextureCard(packageEvent: AttackPackageEvent): string {
       <label class="property-field">
         <span title="このパッケージのテクスチャ弾だけをプレビューで拡大縮小します。">表示倍率</span>
         <input name="previewBulletTextureScale" type="number" min="0.1" max="5" step="0.05" value="${formatPropertyNumber(textureScale)}" />
+      </label>
+      <label class="property-field">
+        <span title="このパッケージのテクスチャ弾だけに追加する表示角度です。">テクスチャ角度</span>
+        <input name="previewBulletTextureAngle" type="number" min="-720" max="720" step="5" value="${formatPropertyNumber(textureAngle)}" />
       </label>
       <div class="preview-texture-actions">
         <button class="music-load-button" type="button" data-package-texture-action="load">${iconSvg("image")}<span>画像を読み込む</span></button>
@@ -3930,6 +3965,7 @@ function renderPackageTextureCard(packageEvent: AttackPackageEvent): string {
 function renderEnemyTextureCard(enemyEvent: SpawnEnemyOriginEvent): string {
   const asset = enemyEvent.previewEnemyTexture;
   const hasTexture = Boolean(asset?.dataUrl);
+  const textureAngle = getEnemyTextureAngle(enemyEvent);
 
   return `
     <div class="preview-texture-card">
@@ -3937,6 +3973,10 @@ function renderEnemyTextureCard(enemyEvent: SpawnEnemyOriginEvent): string {
         <h3>敵テクスチャ</h3>
         <p class="preview-texture-display ${hasTexture ? "has-texture" : ""}">${escapeHtml(asset?.name ?? "No texture")}</p>
       </div>
+      <label class="property-field">
+        <span title="敵テクスチャだけに追加する表示角度です。敵表示角度とは別に調整できます。">テクスチャ角度</span>
+        <input name="previewEnemyTextureAngle" type="number" min="-720" max="720" step="5" value="${formatPropertyNumber(textureAngle)}" />
+      </label>
       <div class="preview-texture-actions">
         <button class="music-load-button" type="button" data-enemy-texture-action="load">${iconSvg("image")}<span>画像を読み込む</span></button>
         <button class="danger-button" type="button" data-enemy-texture-action="clear" ${hasTexture ? "" : "disabled"}>${iconSvg("trash")}<span>解除</span></button>
@@ -4899,6 +4939,7 @@ function ensureEventEditorFields(event: AttackEvent): void {
 
   if (isAttackPackageEvent(event)) {
     event.previewBulletTextureScale = clamp(Number(event.previewBulletTextureScale) || 1, 0.1, 5);
+    event.previewBulletTextureAngle = getPackageBulletTextureAngle(event);
   }
 
   if (event.kind === "spawn_enemy_origin") {
@@ -4906,6 +4947,7 @@ function ensureEventEditorFields(event: AttackEvent): void {
     event.enemyEnterEndX = Number.isFinite(event.enemyEnterEndX) ? event.enemyEnterEndX : event.enemyEndX;
     event.enemyEnterEndY = Number.isFinite(event.enemyEnterEndY) ? event.enemyEnterEndY : event.enemyEndY;
     event.previewEnemyTextureScale = clamp(Number(event.previewEnemyTextureScale) || 1, 0.1, 5);
+    event.previewEnemyTextureAngle = getEnemyTextureAngle(event);
     event.previewEnemyTexture = event.previewEnemyTexture?.dataUrl ? event.previewEnemyTexture : null;
     event.enemyAngle = Number.isFinite(event.enemyAngle) ? event.enemyAngle : 0;
   }

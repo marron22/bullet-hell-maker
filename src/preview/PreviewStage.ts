@@ -2,7 +2,7 @@ import { Application, Assets, Container, Graphics, Sprite, type Texture } from "
 import { defaultAttackColor } from "../core/colors";
 import type { AttackEvent, AttackFrame, BulletRender, CurvedLaserRender, HazardRender, LaserRender, ShapeRender, StageSize } from "../core/types";
 
-type PreviewTextureSettings = { dataUrl: string; scale: number };
+type PreviewTextureSettings = { dataUrl: string; scale: number; angleDeg: number };
 
 interface PreviewRenderState {
   frame: AttackFrame;
@@ -351,8 +351,8 @@ export class PreviewStage {
       const textureSettings = state.enemyTexturesByEventId?.get(shape.eventId);
       const enemyTexture = textureSettings ? this.bulletTextureCache.get(textureSettings.dataUrl) : undefined;
 
-      if (enemyTexture) {
-        texturedEnemyCount = this.drawTexturedEnemy(shape, texturedEnemyCount, enemyTexture, textureSettings?.scale ?? 1);
+      if (textureSettings && enemyTexture) {
+        texturedEnemyCount = this.drawTexturedEnemy(shape, texturedEnemyCount, enemyTexture, textureSettings.scale, textureSettings.angleDeg);
         continue;
       }
 
@@ -363,8 +363,8 @@ export class PreviewStage {
       const textureSettings = state.bulletTexturesByEventId?.get(bullet.eventId);
       const bulletTexture = textureSettings ? this.bulletTextureCache.get(textureSettings.dataUrl) : undefined;
 
-      if (bulletTexture && getVisualPresetFromTypeId(bullet.typeId) === "bullet") {
-        texturedBulletCount = this.drawTexturedBullet(bullet, texturedBulletCount, bulletTexture, textureSettings?.scale ?? 1);
+      if (textureSettings && bulletTexture && getVisualPresetFromTypeId(bullet.typeId) === "bullet") {
+        texturedBulletCount = this.drawTexturedBullet(bullet, texturedBulletCount, bulletTexture, textureSettings.scale, textureSettings.angleDeg);
         continue;
       }
 
@@ -611,7 +611,7 @@ export class PreviewStage {
     });
   }
 
-  private drawTexturedBullet(bullet: BulletRender, index: number, texture: Texture, scale: number): number {
+  private drawTexturedBullet(bullet: BulletRender, index: number, texture: Texture, scale: number, angleDeg: number): number {
     const size = Math.max(1, bullet.radius * 2 * clamp(scale, 0.1, 5));
 
     if (this.isCircleOutsideStage(bullet.x, bullet.y, size / 2)) {
@@ -623,14 +623,14 @@ export class PreviewStage {
     sprite.texture = texture;
     sprite.visible = true;
     sprite.alpha = bullet.alpha;
-    sprite.rotation = bullet.angle ?? 0;
+    sprite.rotation = (bullet.angle ?? 0) + degreesToRadians(angleDeg);
     sprite.position.set(bullet.x, bullet.y);
     sprite.setSize(size, size);
 
     return index + 1;
   }
 
-  private drawTexturedEnemy(shape: ShapeRender, index: number, texture: Texture, scale: number): number {
+  private drawTexturedEnemy(shape: ShapeRender, index: number, texture: Texture, scale: number, angleDeg: number): number {
     const size = Math.max(1, shape.radius * 2 * clamp(scale, 0.1, 5));
 
     if (this.isCircleOutsideStage(shape.x, shape.y, size / 2)) {
@@ -642,7 +642,7 @@ export class PreviewStage {
     sprite.texture = texture;
     sprite.visible = true;
     sprite.alpha = shape.alpha;
-    sprite.rotation = shape.rotation;
+    sprite.rotation = shape.rotation + degreesToRadians(angleDeg);
     sprite.position.set(shape.x, shape.y);
     sprite.setSize(size, size);
 
@@ -823,6 +823,10 @@ function buildRotatedRectPoints(x: number, y: number, length: number, width: num
     x + x1 * cos - y2 * sin,
     y + x1 * sin + y2 * cos,
   ];
+}
+
+function degreesToRadians(degrees: number): number {
+  return (degrees * Math.PI) / 180;
 }
 
 function buildDiamondPoints(x: number, y: number, radiusX: number, radiusY: number, angleDegrees: number): number[] {

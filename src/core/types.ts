@@ -92,6 +92,7 @@ export interface AttackPackageEvent extends BaseAttackEvent {
   generatedEventIds: string[];
   previewBulletTexture?: PreviewImageAsset | null;
   previewBulletTextureScale?: number;
+  previewBulletTextureAngle?: number;
   packageCount: number;
   packageAngleWidth: number;
   packageStartAngle: number;
@@ -201,6 +202,7 @@ export interface SpawnEnemyOriginEvent extends BaseAttackEvent, BulletMotionFiel
   enemyAngle: number;
   previewEnemyTexture?: PreviewImageAsset | null;
   previewEnemyTextureScale?: number;
+  previewEnemyTextureAngle?: number;
 }
 
 export interface FireFromMovingOriginEvent extends BaseAttackEvent, BulletMotionFields, FireClipFields {
