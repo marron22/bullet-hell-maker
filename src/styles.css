@@ -574,7 +574,8 @@ button:disabled {
   overflow-y: auto;
 }
 
-.music-panel > * {
+.music-panel > *,
+.preview-settings-panel > * {
   min-width: 0;
 }
 
@@ -582,6 +583,44 @@ button:disabled {
   max-width: none;
   padding: 7px 9px;
   width: 100%;
+}
+
+.preview-settings-panel {
+  align-content: start;
+  overflow-y: auto;
+}
+
+.preview-texture-card {
+  background: #111111;
+  border: 1px solid #303030;
+  border-radius: 5px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.preview-texture-card h3 {
+  font-size: 13px;
+  margin: 0 0 6px;
+}
+
+.preview-texture-display {
+  color: #8f8f8f;
+  font-size: 12px;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-texture-display.has-texture {
+  color: #f4f4f4;
+}
+
+.preview-texture-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr auto;
 }
 
 .inspector-resize-handle {

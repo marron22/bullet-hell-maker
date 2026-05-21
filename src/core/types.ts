@@ -171,6 +171,12 @@ export interface SpawnRadialEvent extends BaseAttackEvent, BulletMotionFields {
 export interface SpawnEnemyOriginEvent extends BaseAttackEvent, BulletMotionFields {
   kind: "spawn_enemy_origin";
   originSize: number;
+  enemyStartX: number;
+  enemyStartY: number;
+  enemyEndX: number;
+  enemyEndY: number;
+  enemyEnterTime: number;
+  enemyExitTime: number;
 }
 
 export interface FireFromMovingOriginEvent extends BaseAttackEvent, BulletMotionFields, FireClipFields {

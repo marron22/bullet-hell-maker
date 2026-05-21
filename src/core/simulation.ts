@@ -267,18 +267,47 @@ function buildSpawnEnemyOrigin(event: SpawnEnemyOriginEvent, time: number) {
     return undefined;
   }
 
-  const point = evaluateMotionPosition(event, age, event.polarTheta);
+  const duration = Math.max(0.05, event.duration);
+  const progress = clamp(age / duration, 0, 1);
+  const point = {
+    x: lerp(event.enemyStartX, event.enemyEndX, easeInOut(progress)),
+    y: lerp(event.enemyStartY, event.enemyEndY, easeInOut(progress)),
+  };
+  const scale = getEnemyPreviewScale(event, age, duration);
+
+  if (scale <= 0.01) {
+    return undefined;
+  }
 
   return {
     eventId: event.id,
     x: point.x,
     y: point.y,
-    radius: event.originSize,
+    radius: event.originSize * scale,
     rotation: degreesToRadians(event.polarTheta + event.polarThetaVelocity * age),
     sides: 4,
     color: event.color,
-    alpha: 0.95,
+    alpha: 0.95 * Math.min(1, scale),
   };
+}
+
+function getEnemyPreviewScale(event: SpawnEnemyOriginEvent, age: number, duration: number): number {
+  const enterTime = Math.max(0.01, event.enemyEnterTime);
+  const exitTime = Math.max(0.01, event.enemyExitTime);
+  const enterScale = age < enterTime ? getPopInScale(age / enterTime) : 1;
+  const exitRemaining = duration - age;
+  const exitScale = exitRemaining < exitTime ? easeOut(clamp(exitRemaining / exitTime, 0, 1)) : 1;
+
+  return Math.max(0, enterScale * exitScale);
+}
+
+function getPopInScale(progress: number): number {
+  const t = clamp(progress, 0, 1);
+  const back = 1.70158;
+  const eased = 1 + (back + 1) * (t - 1) ** 3 + back * (t - 1) ** 2;
+  const bounce = Math.sin(t * Math.PI) * 0.18;
+
+  return Math.max(0, eased + bounce);
 }
 
 function buildMovingOriginCue(event: FireFromMovingOriginEvent, time: number) {

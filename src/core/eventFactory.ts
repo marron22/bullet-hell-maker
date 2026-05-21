@@ -69,14 +69,18 @@ export function createAttackEvent(kind: AttackEventKind, startTime: number, stag
       return {
         id,
         kind,
-        name: "移動発生源",
+        name: "敵プレビュー",
         startTime: safeStartTime,
-        duration: 5,
+        duration: 4,
         color: 0xffffff,
         ...baseMotion,
-        originVx: 55,
-        polarThetaVelocity: 90,
-        originSize: 26,
+        originSize: 34,
+        enemyStartX: stage.width / 2,
+        enemyStartY: -60,
+        enemyEndX: stage.width / 2,
+        enemyEndY: stage.height * 0.28,
+        enemyEnterTime: 0.42,
+        enemyExitTime: 0.28,
       };
     case "fire_from_moving_origin":
       return {

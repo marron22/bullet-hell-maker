@@ -1,4 +1,4 @@
-import { Application, Graphics } from "pixi.js";
+import { Application, Assets, Container, Graphics, Sprite, type Texture } from "pixi.js";
 import type { AttackEvent, AttackFrame, BulletRender, CurvedLaserRender, HazardRender, LaserRender, ShapeRender, StageSize } from "../core/types";
 
 interface PreviewRenderState {
@@ -37,6 +37,7 @@ export class PreviewStage {
   private readonly eventLayer = new Graphics();
   private readonly trajectoryLayer = new Graphics();
   private readonly attackLayer = new Graphics();
+  private readonly bulletTextureLayer = new Container();
   private readonly hitEffectLayer = new Graphics();
   private readonly playerLayer = new Graphics();
   private playerPosition: { x: number; y: number };
@@ -49,6 +50,8 @@ export class PreviewStage {
   private draggingPackageHandleId: string | null = null;
   private eventLayerHasContent = false;
   private trajectoryLayerHasContent = false;
+  private bulletTexture: Texture | null = null;
+  private readonly bulletTextureSprites: Sprite[] = [];
   private packageHandleDragCallback?: (handleId: string, point: { x: number; y: number }, phase: PackageHandleDragPhase) => void;
 
   constructor(private readonly stageSize: StageSize) {
@@ -76,6 +79,7 @@ export class PreviewStage {
     this.app.stage.addChild(this.backgroundLayer);
     this.app.stage.addChild(this.trajectoryLayer);
     this.app.stage.addChild(this.attackLayer);
+    this.app.stage.addChild(this.bulletTextureLayer);
     this.app.stage.addChild(this.eventLayer);
     this.app.stage.addChild(this.hitEffectLayer);
     this.app.stage.addChild(this.playerLayer);
@@ -189,6 +193,20 @@ export class PreviewStage {
     this.hitEffectPosition = { ...this.playerPosition };
   }
 
+  async setBulletTexture(dataUrl: string | null): Promise<void> {
+    if (!dataUrl) {
+      this.bulletTexture = null;
+      this.hideBulletTextureSprites(0);
+      return;
+    }
+
+    this.bulletTexture = await Assets.load<Texture>(dataUrl);
+
+    for (const sprite of this.bulletTextureSprites) {
+      sprite.texture = this.bulletTexture;
+    }
+  }
+
   render(state: PreviewRenderState): void {
     this.applyShake();
     this.packageHandles = state.packageHandles ?? [];
@@ -293,6 +311,7 @@ export class PreviewStage {
 
   private drawAttackFrame(frame: AttackFrame): void {
     this.attackLayer.clear();
+    let texturedBulletCount = 0;
 
     for (const warning of frame.warnings) {
       this.drawHazard(warning);
@@ -326,8 +345,15 @@ export class PreviewStage {
     }
 
     for (const bullet of frame.bullets) {
+      if (this.bulletTexture && getVisualPresetFromTypeId(bullet.typeId) === "bullet") {
+        texturedBulletCount = this.drawTexturedBullet(bullet, texturedBulletCount);
+        continue;
+      }
+
       this.drawBullet(bullet);
     }
+
+    this.hideBulletTextureSprites(texturedBulletCount);
   }
 
   private drawPlayer(alpha: number): void {
@@ -564,6 +590,45 @@ export class PreviewStage {
       color: shape.color,
       alpha: shape.alpha,
     });
+  }
+
+  private drawTexturedBullet(bullet: BulletRender, index: number): number {
+    if (!this.bulletTexture || this.isCircleOutsideStage(bullet.x, bullet.y, bullet.radius)) {
+      return index;
+    }
+
+    const sprite = this.getBulletTextureSprite(index);
+    const size = Math.max(1, bullet.radius * 2);
+
+    sprite.texture = this.bulletTexture;
+    sprite.visible = true;
+    sprite.alpha = bullet.alpha;
+    sprite.rotation = bullet.angle ?? 0;
+    sprite.position.set(bullet.x, bullet.y);
+    sprite.setSize(size, size);
+
+    return index + 1;
+  }
+
+  private getBulletTextureSprite(index: number): Sprite {
+    const existing = this.bulletTextureSprites[index];
+
+    if (existing) {
+      return existing;
+    }
+
+    const sprite = new Sprite(this.bulletTexture ?? undefined);
+
+    sprite.anchor.set(0.5);
+    this.bulletTextureLayer.addChild(sprite);
+    this.bulletTextureSprites.push(sprite);
+    return sprite;
+  }
+
+  private hideBulletTextureSprites(activeCount: number): void {
+    for (let index = activeCount; index < this.bulletTextureSprites.length; index += 1) {
+      this.bulletTextureSprites[index].visible = false;
+    }
   }
 
   private isCircleOutsideStage(x: number, y: number, radius: number): boolean {

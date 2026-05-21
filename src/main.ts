@@ -38,9 +38,20 @@ interface ProjectCustomPackageAsset {
   code: string;
 }
 
+interface ProjectPreviewImageAsset {
+  name: string;
+  type: string;
+  dataUrl: string;
+}
+
+interface ProjectPreviewSettings {
+  bulletTexture?: ProjectPreviewImageAsset | null;
+}
+
 type ProjectPatternFile = Partial<BulletPattern> & {
   music?: ProjectMusicAsset | null;
   customPackages?: ProjectCustomPackageAsset[];
+  preview?: ProjectPreviewSettings | null;
 };
 
 type AiBeatmapDraftFile = {
@@ -58,7 +69,7 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.11";
+const appVersion = "v0.12";
 let pattern = createStarterPattern();
 const clock = new PlaybackClock();
 let selectedEventId: string | null = pattern.events[0]?.id ?? null;
@@ -76,13 +87,14 @@ let copiedEvents: AttackEvent[] = [];
 let copiedEventsAnchorTime = 0;
 let copyStatusText = "";
 let projectMusicAsset: ProjectMusicAsset | null = null;
+let previewBulletTextureAsset: ProjectPreviewImageAsset | null = null;
 const projectCustomPackageAssets = new Map<string, ProjectCustomPackageAsset>();
 let timelineZoom = 1;
 let markerDragHistoryRecorded = false;
 let snapToMeasures = false;
 let propertyTimeMode: "seconds" | "beats" = "seconds";
 let editingEventId: string | null = null;
-let activeInspectorTab: "events" | "package" | "properties" | "music" = "events";
+let activeInspectorTab: "events" | "package" | "properties" | "music" | "preview" = "events";
 type EditorMode = "global" | "trajectory" | "preview";
 let editorMode: EditorMode = "global";
 let dashRequested = false;
@@ -146,6 +158,8 @@ const timeFieldNames = new Set([
   "holdTime",
   "returnTime",
   "switchInterval",
+  "enemyEnterTime",
+  "enemyExitTime",
 ]);
 
 interface NumberFieldConfig {
@@ -197,6 +211,8 @@ const compactFieldGroups: CompactFieldGroup[] = [
   { label: "target", fields: ["targetX", "targetY"] },
   { label: "start", fields: ["startX", "startY"] },
   { label: "end", fields: ["endX", "endY"] },
+  { label: "enemyStart", fields: ["enemyStartX", "enemyStartY"] },
+  { label: "enemyEnd", fields: ["enemyEndX", "enemyEndY"] },
   { label: "polynomial", fields: ["polynomialD", "polynomialC", "polynomialB", "polynomialA"] },
 ];
 
@@ -206,6 +222,7 @@ const propertyGroups: PropertyGroupConfig[] = [
   { title: "Origin", numberFields: ["originX", "originY", "originVx", "originVy"] },
   { title: "Trajectory", numberFields: ["pathStartX", "pathSpeed", "polynomialA", "polynomialB", "polynomialC", "polynomialD", "gravity"] },
   { title: "Polar", numberFields: ["polarRadius", "polarRadiusVelocity", "polarTheta", "polarThetaVelocity"] },
+  { title: "Enemy Preview", numberFields: ["enemyStartX", "enemyStartY", "enemyEndX", "enemyEndY", "enemyEnterTime", "enemyExitTime", "originSize"], includeColor: true },
   { title: "Visual", selectFields: ["typeId"], numberFields: ["visualSize", "visualWidth", "visualHeight", "visualAngle", "angleSpeed"], includeColor: true },
 ];
 
@@ -243,7 +260,13 @@ const numberFieldConfigs: NumberFieldConfig[] = [
   { name: "radialRepeat", label: "円形回数", min: 1, max: 256, step: 1, integer: true, kinds: ["spawn_radial"] },
   { name: "radialInterval", label: "円形間隔", min: 0, max: 10, step: 0.05, kinds: ["spawn_radial"] },
   { name: "radialStartAngle", label: "開始角度", min: -720, max: 720, step: 5, kinds: ["spawn_radial"] },
-  { name: "originSize", label: "発生源サイズ", min: 4, max: 160, step: 1, kinds: ["spawn_enemy_origin"] },
+  { name: "originSize", label: "敵サイズ", min: 4, max: 240, step: 1, kinds: ["spawn_enemy_origin"] },
+  { name: "enemyStartX", label: "出現X", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
+  { name: "enemyStartY", label: "出現Y", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
+  { name: "enemyEndX", label: "消えるX", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
+  { name: "enemyEndY", label: "消えるY", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
+  { name: "enemyEnterTime", label: "出現時間", min: 0.01, max: 5, step: 0.05, kinds: ["spawn_enemy_origin"] },
+  { name: "enemyExitTime", label: "消える時間", min: 0.01, max: 5, step: 0.05, kinds: ["spawn_enemy_origin"] },
   { name: "laserCount", label: "レーザー本数", min: 1, max: 64, step: 1, integer: true, kinds: ["spawn_curved_laser"] },
   { name: "laserAngleStepDeg", label: "レーザー角度間隔", min: -360, max: 360, step: 1, kinds: ["spawn_curved_laser"] },
   { name: "laserWidth", label: "レーザー幅", min: 1, max: 200, step: 1, kinds: ["spawn_curved_laser"] },
@@ -438,6 +461,13 @@ const propertyDescriptions: Record<string, string> = {
   visualHeight: "四角形、ひし形、壁、レーザーなどの見た目の高さです。ひし形では外接する高さになります。",
   visualAngle: "見た目だけに加える回転角度です。",
   angleSpeed: "見た目を毎秒どれだけ回転させるかです。",
+  enemyStartX: "敵が出現し始めるX位置です。",
+  enemyStartY: "敵が出現し始めるY位置です。",
+  enemyEndX: "敵が消えるときのX位置です。",
+  enemyEndY: "敵が消えるときのY位置です。",
+  enemyEnterTime: "敵がびよんと大きくなって出てくる時間です。",
+  enemyExitTime: "敵がひゅんと小さくなって消える時間です。",
+  originSize: "敵プレビューの基準サイズです。",
   color: "プレビューとタイムラインで使う攻撃色です。",
   musicOffset: "音楽グリッドの開始位置です。曲の拍と線を合わせるために使います。",
   bpm: "1分あたりの拍数です。変更すると1小節の時間も更新されます。",
@@ -489,6 +519,7 @@ appRoot.innerHTML = `
               <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="boss-fan">${iconSvg("fan")}<span>ボス扇弾</span></button>
               <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="polynomial-radial">${iconSvg("curve")}<span>カーブ回転弾</span></button>
               <button class="menu-item" type="button" data-add-kind="spawn_bullet_spread" data-add-template="curved-laser-ring">${iconSvg("burst")}<span>8方向カーブレーザー</span></button>
+              <button class="menu-item" type="button" data-add-kind="spawn_enemy_origin">${iconSvg("enemy")}<span>敵プレビュー</span></button>
             </div>
             <div class="menu-divider" role="separator"></div>
             <div id="package-menu-items" class="package-menu-items"></div>
@@ -510,6 +541,7 @@ appRoot.innerHTML = `
         <input id="import-input" type="file" accept="application/json,.json" hidden />
         <input id="ai-beatmap-input" type="file" accept="application/json,.json" hidden />
         <input id="package-code-input" type="file" accept=".mjs,text/javascript,application/javascript" hidden />
+        <input id="bullet-texture-input" type="file" accept="image/*" hidden />
         <input id="music-input" type="file" accept="audio/*" hidden />
       </div>
       <div class="toolbar-spacer"></div>
@@ -525,6 +557,7 @@ appRoot.innerHTML = `
           <button class="inspector-tab-button is-active" type="button" data-inspector-tab="events" role="tab" aria-selected="true">${iconSvg("list")}<span>イベント</span></button>
           <button class="inspector-tab-button" type="button" data-inspector-tab="properties" role="tab" aria-selected="false">${iconSvg("sliders")}<span>プロパティ</span></button>
           <button class="inspector-tab-button" type="button" data-inspector-tab="music" role="tab" aria-selected="false">${iconSvg("music")}<span>音楽</span></button>
+          <button class="inspector-tab-button" type="button" data-inspector-tab="preview" role="tab" aria-selected="false">${iconSvg("image")}<span>プレビュー</span></button>
         </div>
         <section id="events-tab-panel" class="inspector-tab-panel" data-inspector-panel="events" role="tabpanel">
           <div id="event-list" class="event-list"></div>
@@ -544,6 +577,18 @@ appRoot.innerHTML = `
             <label><span title="${getPropertyTooltip("bpm")}">BPM</span><input id="bpm-input" type="number" min="1" max="400" step="0.1" /></label>
             <label><span title="${getPropertyTooltip("measureSeconds")}">measureSeconds</span><input id="measure-interval-input" type="number" min="0.05" max="120" step="0.01" /></label>
             <label><span title="${getPropertyTooltip("beatsPerMeasure")}">beatsPerMeasure</span><input id="beats-per-measure-input" type="number" min="1" max="16" step="1" /></label>
+          </div>
+        </section>
+        <section id="preview-tab-panel" class="inspector-tab-panel preview-settings-panel" data-inspector-panel="preview" role="tabpanel" hidden>
+          <div class="preview-texture-card">
+            <div>
+              <h3>弾テクスチャ</h3>
+              <p id="bullet-texture-display" class="preview-texture-display">No texture</p>
+            </div>
+            <div class="preview-texture-actions">
+              <button id="bullet-texture-button" class="music-load-button" type="button">${iconSvg("image")}<span>画像を読み込む</span></button>
+              <button id="clear-bullet-texture-button" class="danger-button" type="button">${iconSvg("trash")}<span>解除</span></button>
+            </div>
           </div>
         </section>
       </aside>
@@ -607,14 +652,18 @@ const importButton = requireElement<HTMLButtonElement>("#import-button");
 const importAiBeatmapButton = requireElement<HTMLButtonElement>("#import-ai-beatmap-button");
 const importPackageButton = requireElement<HTMLButtonElement>("#import-package-button");
 const musicButton = requireElement<HTMLButtonElement>("#music-button");
+const bulletTextureButton = requireElement<HTMLButtonElement>("#bullet-texture-button");
+const clearBulletTextureButton = requireElement<HTMLButtonElement>("#clear-bullet-texture-button");
 const undoButton = requireElement<HTMLButtonElement>("#undo-button");
 const redoButton = requireElement<HTMLButtonElement>("#redo-button");
 const importInput = requireElement<HTMLInputElement>("#import-input");
 const aiBeatmapInput = requireElement<HTMLInputElement>("#ai-beatmap-input");
 const packageCodeInput = requireElement<HTMLInputElement>("#package-code-input");
+const bulletTextureInput = requireElement<HTMLInputElement>("#bullet-texture-input");
 const musicInput = requireElement<HTMLInputElement>("#music-input");
 const timeDisplay = requireElement<HTMLDivElement>("#time-display");
 const musicDisplay = requireElement<HTMLDivElement>("#music-display");
+const bulletTextureDisplay = requireElement<HTMLParagraphElement>("#bullet-texture-display");
 const eventList = requireElement<HTMLDivElement>("#event-list");
 const packagePanel = requireElement<HTMLDivElement>("#package-panel");
 const propertyForm = requireElement<HTMLFormElement>("#property-form");
@@ -674,7 +723,7 @@ inspectorTabButtons.forEach((button) => {
   button.addEventListener("click", () => {
     const nextTab = button.dataset.inspectorTab;
 
-    if (nextTab === "events" || nextTab === "package" || nextTab === "properties" || nextTab === "music") {
+    if (nextTab === "events" || nextTab === "package" || nextTab === "properties" || nextTab === "music" || nextTab === "preview") {
       activeInspectorTab = nextTab;
       renderInspectorTabs();
     }
@@ -862,6 +911,25 @@ packageCodeInput.addEventListener("change", () => {
   packageCodeInput.value = "";
 });
 
+bulletTextureButton.addEventListener("click", () => {
+  bulletTextureInput.click();
+});
+
+clearBulletTextureButton.addEventListener("click", () => {
+  clearPreviewBulletTexture();
+});
+
+bulletTextureInput.addEventListener("change", () => {
+  const file = bulletTextureInput.files?.[0];
+
+  if (!file) {
+    return;
+  }
+
+  void loadPreviewBulletTexture(file);
+  bulletTextureInput.value = "";
+});
+
 musicInput.addEventListener("change", () => {
   const file = musicInput.files?.[0];
 
@@ -895,6 +963,10 @@ const previewResizeObserver = new ResizeObserver(() => {
 previewResizeObserver.observe(previewPanel);
 window.addEventListener("resize", resizeTimelineToViewport);
 window.addEventListener("resize", resizePreviewHost);
+window.addEventListener("beforeunload", (event) => {
+  event.preventDefault();
+  event.returnValue = "";
+});
 
 addMenu.addEventListener("click", handleAddMenuClick);
 
@@ -951,6 +1023,7 @@ function handleAddMenuClick(event: MouseEvent): void {
   pattern.events.push(attackEvent);
   sortEvents();
   selectSingleEvent(attackEvent.id);
+  activeInspectorTab = "properties";
   closeMenus();
   renderEverything();
 }
@@ -969,10 +1042,18 @@ document.addEventListener("keydown", (event) => {
       event.preventDefault();
       pressedPreviewKeys.add(event.code);
 
-      if (event.code === "Space" && !event.repeat) {
+      if ((event.code === "ShiftLeft" || event.code === "ShiftRight") && !event.repeat) {
         dashRequested = true;
       }
 
+      return;
+    }
+
+    if (event.code === "Space") {
+      event.preventDefault();
+      if (!event.repeat) {
+        togglePlayback();
+      }
       return;
     }
   }
@@ -1488,6 +1569,9 @@ function exportProjectPattern(): void {
         }
       : null,
     customPackages: getProjectCustomPackageAssets(),
+    preview: {
+      bulletTexture: previewBulletTextureAsset,
+    },
   };
 
   downloadJson(projectPattern, `${pattern.title.replace(/[^\w-]+/g, "_") || "danmaku_project"}.project.json`);
@@ -1555,6 +1639,12 @@ async function importPattern(file: File): Promise<void> {
       pattern.duration = Math.max(pattern.duration, audio.duration || 0);
     } else {
       clearMusic();
+    }
+    try {
+      await setPreviewBulletTextureAsset(parsed.preview?.bulletTexture ?? null);
+    } catch (error) {
+      console.warn("Preview bullet texture could not be restored.", error);
+      await setPreviewBulletTextureAsset(null);
     }
 
     selectSingleEvent(pattern.events[0]?.id ?? null);
@@ -1940,6 +2030,33 @@ async function loadMusicFromProjectAsset(asset: ProjectMusicAsset): Promise<void
   musicVolumeInput.value = String(Math.round(audio.volume * 100));
 }
 
+async function loadPreviewBulletTexture(file: File): Promise<void> {
+  if (!file.type.startsWith("image/")) {
+    window.alert("画像ファイルを選択してください。");
+    return;
+  }
+
+  try {
+    const asset = await buildProjectImageAsset(file);
+
+    await setPreviewBulletTextureAsset(asset);
+  } catch (error) {
+    console.error(error);
+    window.alert("弾テクスチャを読み込めませんでした。別の画像を試してください。");
+  }
+}
+
+async function setPreviewBulletTextureAsset(asset: ProjectPreviewImageAsset | null): Promise<void> {
+  previewBulletTextureAsset = asset;
+  await preview.setBulletTexture(asset?.dataUrl ?? null);
+  syncPreviewSettingsPanel();
+  renderPreview();
+}
+
+function clearPreviewBulletTexture(): void {
+  void setPreviewBulletTextureAsset(null);
+}
+
 function clearMusic(): void {
   stopPlayback();
   projectMusicAsset = null;
@@ -1956,6 +2073,22 @@ function clearMusic(): void {
   audio.removeAttribute("src");
   audio.load();
   renderWaveform();
+}
+
+function buildProjectImageAsset(file: File): Promise<ProjectPreviewImageAsset> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.addEventListener("load", () => {
+      resolve({
+        name: file.name,
+        type: file.type,
+        dataUrl: String(reader.result ?? ""),
+      });
+    });
+    reader.addEventListener("error", () => reject(reader.error ?? new Error("Image file could not be read.")));
+    reader.readAsDataURL(file);
+  });
 }
 
 function buildProjectMusicAsset(file: File): Promise<ProjectMusicAsset> {
@@ -2511,7 +2644,8 @@ function isPreviewControlCode(code: string): boolean {
     code === "KeyD" ||
     code === "KeyW" ||
     code === "KeyS" ||
-    code === "Space"
+    code === "ShiftLeft" ||
+    code === "ShiftRight"
   );
 }
 
@@ -2645,8 +2779,17 @@ function syncUi(): void {
   syncPlaybackButton();
   syncHistoryButtons();
   syncSnapButton();
+  syncPreviewSettingsPanel();
   addTimelineLaneButton.disabled = getTimelineLaneCount() >= maximumTimelineLaneCount;
   musicDisplay.classList.toggle("has-music", hasMusic());
+}
+
+function syncPreviewSettingsPanel(): void {
+  const hasTexture = Boolean(previewBulletTextureAsset);
+
+  bulletTextureDisplay.textContent = previewBulletTextureAsset?.name ?? "No texture";
+  bulletTextureDisplay.classList.toggle("has-texture", hasTexture);
+  clearBulletTextureButton.disabled = !hasTexture;
 }
 
 function syncPreviewOptionButtons(isPreviewMode: boolean): void {
@@ -4420,7 +4563,6 @@ function unityMotionKinds(): AttackEventKind[] {
     "spawn_bullet_spread",
     "spawn_aimed_spread",
     "spawn_radial",
-    "spawn_enemy_origin",
     "fire_from_moving_origin",
     "spawn_curved_laser",
   ];
@@ -4441,7 +4583,7 @@ function eventKindLabel(kind: AttackEventKind): string {
     case "spawn_radial":
       return "円形バースト";
     case "spawn_enemy_origin":
-      return "移動発生源";
+      return "敵プレビュー";
     case "fire_from_moving_origin":
       return "移動源連射";
     case "spawn_curved_laser":
@@ -4540,6 +4682,7 @@ function iconSvg(name: string): string {
     lane: '<rect x="4" y="4" width="16" height="16" rx="1"></rect><path d="M9 4v16"></path><path d="M15 4v16"></path>',
     download: '<path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path>',
     upload: '<path d="M12 21V9"></path><path d="m7 14 5-5 5 5"></path><path d="M5 3h14"></path>',
+    image: '<rect x="3" y="5" width="18" height="14" rx="2"></rect><circle cx="8" cy="10" r="2"></circle><path d="m3 17 5-5 4 4 3-3 6 6"></path>',
     sparkles: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z"></path><path d="M5 15l.8 2.2L8 18l-2.2.8L5 21l-.8-2.2L2 18l2.2-.8L5 15z"></path><path d="M19 3l.6 1.6L21 5l-1.4.4L19 7l-.6-1.6L17 5l1.4-.4L19 3z"></path>',
     trash: '<path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 15H6L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>',
     music: '<path d="M9 18V5l11-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="17" cy="16" r="3"></circle>',
@@ -4554,6 +4697,7 @@ function iconSvg(name: string): string {
     wall: '<path d="M4 5h16v14H4z"></path><path d="M4 10h16"></path><path d="M9 5v5"></path><path d="M15 10v9"></path>',
     laser: '<path d="M4 12h16"></path><path d="m16 8 4 4-4 4"></path><path d="M4 8v8"></path>',
     rotate: '<path d="M21 12a9 9 0 1 1-3-6.7"></path><path d="M21 4v6h-6"></path>',
+    enemy: '<path d="M12 3 5 7v7c0 4 3 7 7 7s7-3 7-7V7l-7-4z"></path><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><path d="M9 16h6"></path>',
     scatter: '<circle cx="6" cy="12" r="2"></circle><circle cx="14" cy="7" r="1.7"></circle><circle cx="17" cy="15" r="1.7"></circle><path d="M8 11 18 5"></path><path d="M8 13l12 6"></path>',
     laserRows: '<path d="M4 7h16"></path><path d="M4 12h16"></path><path d="M4 17h16"></path><path d="m17 4 3 3-3 3"></path><path d="m17 14 3 3-3 3"></path>',
     bomb: '<circle cx="11" cy="13" r="7"></circle><path d="M15.5 7.5 19 4"></path><path d="M18 4h3v3"></path><path d="M8 13h6"></path><path d="M11 10v6"></path>',
