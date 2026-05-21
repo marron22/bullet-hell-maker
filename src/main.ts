@@ -43,7 +43,16 @@ type ProjectPatternFile = Partial<BulletPattern> & {
   customPackages?: ProjectCustomPackageAsset[];
 };
 
-const appVersion = "v0.5";
+type AiBeatmapDraftFile = {
+  format?: string;
+  version?: number;
+  title?: string;
+  duration?: number;
+  timeline?: unknown;
+  events?: unknown[];
+};
+
+const appVersion = "v0.6";
 let pattern = createStarterPattern();
 const clock = new PlaybackClock();
 let selectedEventId: string | null = pattern.events[0]?.id ?? null;
@@ -443,6 +452,7 @@ appRoot.innerHTML = `
           <div class="menu-popover" data-menu="file">
             <button id="export-button" class="menu-item" type="button">${iconSvg("download")}<span>書き出し</span></button>
             <button id="import-button" class="menu-item" type="button">${iconSvg("upload")}<span>読み込み</span></button>
+            <button id="import-ai-beatmap-button" class="menu-item" type="button">${iconSvg("sparkles")}<span>AI譜面読み込み</span></button>
           </div>
         </div>
         <div class="menu">
@@ -482,6 +492,7 @@ appRoot.innerHTML = `
       </div>
       <div class="hidden-inputs">
         <input id="import-input" type="file" accept="application/json,.json" hidden />
+        <input id="ai-beatmap-input" type="file" accept="application/json,.json" hidden />
         <input id="package-code-input" type="file" accept=".mjs,text/javascript,application/javascript" hidden />
         <input id="music-input" type="file" accept="audio/*" hidden />
       </div>
@@ -575,11 +586,13 @@ const resetButton = requireElement<HTMLButtonElement>("#reset-button");
 const exportButton = requireElement<HTMLButtonElement>("#export-button");
 const exportUnityButton = requireElement<HTMLButtonElement>("#export-unity-button");
 const importButton = requireElement<HTMLButtonElement>("#import-button");
+const importAiBeatmapButton = requireElement<HTMLButtonElement>("#import-ai-beatmap-button");
 const importPackageButton = requireElement<HTMLButtonElement>("#import-package-button");
 const musicButton = requireElement<HTMLButtonElement>("#music-button");
 const undoButton = requireElement<HTMLButtonElement>("#undo-button");
 const redoButton = requireElement<HTMLButtonElement>("#redo-button");
 const importInput = requireElement<HTMLInputElement>("#import-input");
+const aiBeatmapInput = requireElement<HTMLInputElement>("#ai-beatmap-input");
 const packageCodeInput = requireElement<HTMLInputElement>("#package-code-input");
 const musicInput = requireElement<HTMLInputElement>("#music-input");
 const timeDisplay = requireElement<HTMLDivElement>("#time-display");
@@ -736,6 +749,11 @@ importButton.addEventListener("click", () => {
   importInput.click();
 });
 
+importAiBeatmapButton.addEventListener("click", () => {
+  closeMenus();
+  aiBeatmapInput.click();
+});
+
 importPackageButton.addEventListener("click", () => {
   closeMenus();
   packageCodeInput.click();
@@ -782,6 +800,17 @@ importInput.addEventListener("change", () => {
 
   void importPattern(file);
   importInput.value = "";
+});
+
+aiBeatmapInput.addEventListener("change", () => {
+  const file = aiBeatmapInput.files?.[0];
+
+  if (!file) {
+    return;
+  }
+
+  void importAiBeatmap(file);
+  aiBeatmapInput.value = "";
 });
 
 packageCodeInput.addEventListener("change", () => {
@@ -1498,6 +1527,195 @@ async function importPattern(file: File): Promise<void> {
     console.error(error);
     window.alert("JSONを読み込めませんでした。弾幕データの形式を確認してください。");
   }
+}
+
+async function importAiBeatmap(file: File): Promise<void> {
+  try {
+    const parsed = parseJsonWithOptionalFence(await file.text()) as AiBeatmapDraftFile;
+
+    if (!isRecord(parsed) || parsed.format !== "school-fes-ai-beatmap" || parsed.version !== 1 || !Array.isArray(parsed.events)) {
+      throw new Error("Invalid AI beatmap draft.");
+    }
+
+    if (parsed.events.length === 0) {
+      throw new Error("AI beatmap draft has no events.");
+    }
+
+    if (!window.confirm("AI譜面を読み込み、現在のイベントを置き換えます。よろしいですか？")) {
+      return;
+    }
+
+    pushHistory();
+
+    if (typeof parsed.title === "string" && parsed.title.trim()) {
+      pattern.title = parsed.title.trim();
+    }
+
+    const requestedDuration = Number(parsed.duration);
+
+    if (Number.isFinite(requestedDuration) && requestedDuration > 0) {
+      pattern.duration = requestedDuration;
+    }
+
+    applyAiBeatmapTimeline(parsed.timeline);
+    pattern.events = buildAiBeatmapEvents(parsed.events);
+    pattern.duration = Math.max(
+      1,
+      pattern.duration,
+      audio.duration || 0,
+      ...pattern.events.map((event) => getEventEndTime(event)),
+    );
+    sortEvents();
+    ensurePatternEditorFields();
+    selectSingleEvent(pattern.events[0]?.id ?? null);
+    activeInspectorTab = "events";
+    editingEventId = null;
+    resetPlayback();
+    renderEverything();
+  } catch (error) {
+    console.error(error);
+    window.alert("AI譜面JSONを読み込めませんでした。docs/gemini-beatmap-prompt.md の形式に合っているか確認してください。");
+  }
+}
+
+function buildAiBeatmapEvents(rawEvents: unknown[]): AttackEvent[] {
+  const events: AttackEvent[] = [];
+
+  rawEvents.forEach((rawEvent, index) => {
+    const packageEvent = createAiBeatmapPackageEvent(rawEvent, index);
+
+    events.push(packageEvent, ...createGeneratedEventsForPackage(packageEvent, pattern.stage));
+  });
+
+  return events;
+}
+
+function createAiBeatmapPackageEvent(rawEvent: unknown, index: number): AttackPackageEvent {
+  if (!isRecord(rawEvent)) {
+    throw new Error(`AI beatmap event ${index + 1} is not an object.`);
+  }
+
+  const kind = parseAiBeatmapPackageKind(rawEvent.kind, index);
+  const startTime = Number(rawEvent.time);
+
+  if (!Number.isFinite(startTime) || startTime < 0) {
+    throw new Error(`AI beatmap event ${index + 1} has an invalid time.`);
+  }
+
+  const packageEvent = createAttackPackageEvent(kind, startTime, pattern.stage);
+  const name = typeof rawEvent.name === "string" ? rawEvent.name.trim() : "";
+  const lane = Number(rawEvent.lane);
+
+  packageEvent.name = name || `${getPackageKindLabel(kind)} ${index + 1}`;
+  packageEvent.timelineLane = Number.isFinite(lane)
+    ? Math.round(clamp(lane, 0, maximumTimelineLaneCount - 1))
+    : Math.min(index % Math.max(1, getTimelineLaneCount()), maximumTimelineLaneCount - 1);
+  applyAiBeatmapPackageParams(packageEvent, rawEvent.params);
+  applyAiBeatmapPackageColor(packageEvent, rawEvent.color);
+
+  return packageEvent;
+}
+
+function parseAiBeatmapPackageKind(value: unknown, index: number): AttackPackageKind {
+  const availableKinds = getAvailablePackageKinds();
+
+  if (typeof value === "string" && isAttackPackageKind(value) && availableKinds.includes(value as AttackPackageKind)) {
+    return value as AttackPackageKind;
+  }
+
+  throw new Error(`AI beatmap event ${index + 1} has an unsupported package kind.`);
+}
+
+function applyAiBeatmapPackageParams(packageEvent: AttackPackageEvent, rawParams: unknown): void {
+  if (!isRecord(rawParams)) {
+    return;
+  }
+
+  const packageRecord = packageEvent as unknown as Record<string, number | string>;
+
+  for (const config of getPackageFieldConfigs(packageEvent)) {
+    if (config.name === "startTime" || !(config.name in rawParams)) {
+      continue;
+    }
+
+    const value = rawParams[config.name];
+
+    if (config.type === "select") {
+      if (typeof value === "string" && config.options?.some((option) => option.value === value)) {
+        packageRecord[config.name] = value;
+      }
+      continue;
+    }
+
+    if (config.type === "checkbox") {
+      packageRecord[config.name] = value === true || Number(value) > 0 ? 1 : 0;
+      continue;
+    }
+
+    const parsedValue = Number(value);
+
+    if (!Number.isFinite(parsedValue)) {
+      continue;
+    }
+
+    const min = config.min ?? Number.NEGATIVE_INFINITY;
+    const max = config.max ?? Number.POSITIVE_INFINITY;
+    const nextValue = clamp(parsedValue, min, max);
+    packageRecord[config.name] = config.integer ? Math.round(nextValue) : nextValue;
+  }
+}
+
+function applyAiBeatmapPackageColor(packageEvent: AttackPackageEvent, value: unknown): void {
+  if (typeof value === "string" && value.trim()) {
+    packageEvent.color = parseColorInput(value, packageEvent.color);
+    return;
+  }
+
+  const parsedValue = Number(value);
+
+  if (Number.isFinite(parsedValue)) {
+    packageEvent.color = Math.round(clamp(parsedValue, 0, 0xffffff));
+  }
+}
+
+function applyAiBeatmapTimeline(rawTimeline: unknown): void {
+  if (!isRecord(rawTimeline)) {
+    return;
+  }
+
+  const bpm = Number(rawTimeline.bpm);
+  const beatsPerMeasure = Number(rawTimeline.beatsPerMeasure);
+  const musicOffset = Number(rawTimeline.musicOffset);
+
+  if (Number.isFinite(bpm)) {
+    pattern.timeline.bpm = clamp(bpm, 1, 400);
+  }
+
+  if (Number.isFinite(beatsPerMeasure)) {
+    pattern.timeline.beatsPerMeasure = Math.round(clamp(beatsPerMeasure, 1, 16));
+  }
+
+  if (Number.isFinite(musicOffset)) {
+    pattern.timeline.musicOffset = clamp(musicOffset, -60, Math.max(600, pattern.duration));
+  }
+}
+
+function parseJsonWithOptionalFence(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    const fencedJson = text.match(/```(?:json)?\s*([\s\S]*?)```/iu)?.[1];
+
+    if (fencedJson) {
+      return JSON.parse(fencedJson);
+    }
+
+    throw error;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 async function importPackageCodeFile(file: File): Promise<void> {
@@ -4135,6 +4353,7 @@ function iconSvg(name: string): string {
     lane: '<rect x="4" y="4" width="16" height="16" rx="1"></rect><path d="M9 4v16"></path><path d="M15 4v16"></path>',
     download: '<path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path>',
     upload: '<path d="M12 21V9"></path><path d="m7 14 5-5 5 5"></path><path d="M5 3h14"></path>',
+    sparkles: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z"></path><path d="M5 15l.8 2.2L8 18l-2.2.8L5 21l-.8-2.2L2 18l2.2-.8L5 15z"></path><path d="M19 3l.6 1.6L21 5l-1.4.4L19 7l-.6-1.6L17 5l1.4-.4L19 3z"></path>',
     trash: '<path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 15H6L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>',
     music: '<path d="M9 18V5l11-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="17" cy="16" r="3"></circle>',
     box: '<path d="M21 8 12 3 3 8l9 5 9-5z"></path><path d="M3 8v8l9 5 9-5V8"></path><path d="M12 13v8"></path>',
