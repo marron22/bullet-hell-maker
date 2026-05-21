@@ -1,4 +1,4 @@
-# 弾幕メーカー v0.14
+# 弾幕メーカー v0.15
 
 JSaB風の回避アクションゲーム向けに、弾幕やレーザー、危険領域をタイムライン上で作成・確認するためのブラウザツールです。
 
@@ -52,6 +52,8 @@ https://marron22.github.io/bullet-hell-maker/
 プロジェクトを後から再編集したい場合は、必ず「プロジェクト書き出し」を使ってください。
 
 Unity向け書き出しでは、StageData 側の `bulletSpawners[].clipName` が BulletBuffers 側の `bulletBuffers[].name` を参照します。座標はプレビュー画面を Unity 側の左下原点、右上 `(18, 36)` のワールドとして扱い、Y軸は Unity に合わせて上向きに変換します。
+
+通常の丸弾は Unity 側の `normal` として扱われるように `typeId: 1` / `typeName: "normal"` で出力します。レーザーは細長い画像を Unity 側の画面範囲より長く伸ばす前提で出力し、太さは `bulletSpawners[].laserWidth` で調整します。
 
 ## キーボードショートカット
 

@@ -63,7 +63,7 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.14";
+const appVersion = "v0.15";
 let pattern = createStarterPattern();
 const clock = new PlaybackClock();
 let selectedEventId: string | null = pattern.events[0]?.id ?? null;

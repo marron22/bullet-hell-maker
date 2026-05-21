@@ -116,6 +116,7 @@ export interface UnitySeparatedExport {
 
 const unityWorldWidth = 18;
 const unityWorldHeight = 36;
+const unityLaserOverscanMultiplier = 1.25;
 const polynomialUnitPixels = 100;
 
 export function buildUnitySeparatedExport(pattern: BulletPattern): UnitySeparatedExport {
@@ -477,6 +478,10 @@ function addBufferAndSpawner(
     laserWidth?: number;
   },
 ): void {
+  const laserLength = options.isLaser
+    ? Math.max(getUnityOverscanLaserLength(), options.laserLength ? toUnityScalar(context, options.laserLength) : 0)
+    : 0;
+
   context.buffers.push({
     name: bufferName,
     bullets,
@@ -498,7 +503,7 @@ function addBufferAndSpawner(
     size: 0,
     laserCount: options.isLaser ? 1 : 0,
     laserSpacing: 0,
-    laserLength: 0,
+    laserLength,
     laserWidth: options.laserWidth ? toUnityScalar(context, options.laserWidth) : 0,
   });
 }
@@ -509,10 +514,10 @@ function createUnityBulletData(
   editorAngleDegrees: number,
   overrides: { speed?: number; size?: number; life?: number } = {},
 ): UnityBulletDataJson {
-  const typeId = Math.round(motion.typeId ?? 0);
+  const editorTypeId = Math.round(motion.typeId ?? 0);
+  const typeId = toUnityBulletTypeId(editorTypeId);
   const speed = toUnitySpeed(context, overrides.speed ?? motion.pathSpeed, editorAngleDegrees);
-  const rawSize = overrides.size ?? getMotionSize(motion);
-  const size = typeId === 4 ? toUnityDistanceAlongAngle(context, rawSize, editorAngleDegrees) : toUnityScalar(context, rawSize);
+  const size = editorTypeId === 4 ? getUnityOverscanLaserLength() : toUnityScalar(context, overrides.size ?? getMotionSize(motion));
   const startX = toUnityScalarX(context, motion.pathStartX);
   const xUnitScale = polynomialUnitPixels / context.scaleX;
   const yUnitScale = polynomialUnitPixels / context.scaleY;
@@ -544,7 +549,7 @@ function createUnityBulletData(
     nowCalculateX: startX,
     polynomial,
     typeId,
-    typeName: typeNameFromTypeId(typeId),
+    typeName: typeNameFromTypeId(editorTypeId),
     size,
     color: colorToFloat4(motion.color),
     areaNum: 0,
@@ -670,6 +675,10 @@ function toUnityDistanceAlongAngle(context: ExportContext, value: number, editor
   return round(value * Math.hypot(x, y));
 }
 
+function getUnityOverscanLaserLength(): number {
+  return round(Math.hypot(unityWorldWidth, unityWorldHeight) * unityLaserOverscanMultiplier);
+}
+
 function toUnitySpeed(context: ExportContext, value: number, editorAngleDegrees: number): number {
   return toUnityDistanceAlongAngle(context, value, editorAngleDegrees);
 }
@@ -689,6 +698,14 @@ function colorToFloat4(color: number): Float4 {
   };
 }
 
+function toUnityBulletTypeId(editorTypeId: number): number {
+  if (editorTypeId === 0) {
+    return 1;
+  }
+
+  return editorTypeId;
+}
+
 function typeNameFromTypeId(typeId: number): string {
   switch (typeId) {
     case 1:
@@ -701,7 +718,7 @@ function typeNameFromTypeId(typeId: number): string {
       return "laser";
     case 0:
     default:
-      return "knife";
+      return "normal";
   }
 }
 
