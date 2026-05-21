@@ -67,6 +67,7 @@ export interface EventDifficultySettings {
   visible?: boolean;
   countScale?: number;
   warningTimeScale?: number;
+  speedScale?: number;
 }
 
 export interface BaseAttackEvent {

@@ -63,7 +63,7 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.16";
+const appVersion = "v0.17";
 let pattern = createStarterPattern();
 let activeDifficultyId: DifficultyId = pattern.activeDifficulty ?? "normal";
 const clock = new PlaybackClock();
@@ -106,6 +106,7 @@ let activePackageHandleId: string | null = null;
 let packageTextureTargetId: string | null = null;
 let enemyTextureTargetId: string | null = null;
 let previewEventWindows: PreviewEventWindow[] | null = null;
+let difficultyAdjustedPreviewEvents: AttackEvent[] | null = null;
 let lastPreviewWaveformRenderTime = 0;
 let previewLightweightEnabled = true;
 let previewTimelineVisible = true;
@@ -154,7 +155,26 @@ const countDifficultyFields = [
   "packageCount",
   "packageBulletCount",
 ] as const;
-const warningDifficultyFields = ["warningTime", "enemyWarningTime"] as const;
+const warningDifficultyFields = ["warningTime", "enemyWarningTime", "packageWarningTime"] as const;
+const nonNegativeSpeedDifficultyFields = [
+  "pathSpeed",
+  "bulletSpeed",
+  "minSpeed",
+  "speedStep",
+  "nextSpeed",
+  "growSpeed",
+  "extendSpeed",
+  "packageSpeed",
+  "packageSplitSpeed",
+] as const;
+const signedSpeedDifficultyFields = [
+  "polarRadiusVelocity",
+  "polarThetaVelocity",
+  "angleSpeed",
+  "thetaVelocity",
+  "rotationSpeed",
+  "packageRotationSpeed",
+] as const;
 const previewPlayerVelocity = { x: 0, y: 0 };
 const undoStack: BulletPattern[] = [];
 const redoStack: BulletPattern[] = [];
@@ -763,7 +783,7 @@ difficultyButtons.forEach((button) => {
 
     activeDifficultyId = difficultyId;
     pattern.activeDifficulty = difficultyId;
-    previewEventWindows = null;
+    invalidatePreviewRenderCache();
     clearAimCache();
     renderEverything();
   });
@@ -2325,6 +2345,7 @@ function renderEverything(): void {
 
 function invalidatePreviewRenderCache(): void {
   previewEventWindows = null;
+  difficultyAdjustedPreviewEvents = null;
   lastPreviewWaveformRenderTime = 0;
 }
 
@@ -2504,7 +2525,7 @@ function getPreviewEvents(currentTime = clock.time): AttackEvent[] {
   }
 
   if (editorMode !== "preview" || !previewLightweightEnabled) {
-    return pattern.events.filter(isPreviewRenderableEvent).map((event) => getDifficultyAdjustedEvent(event));
+    return getDifficultyAdjustedPreviewEvents().filter(isAdjustedPreviewRenderableEvent);
   }
 
   const activeEvents: AttackEvent[] = [];
@@ -2527,15 +2548,13 @@ function getPreviewEventWindows(): PreviewEventWindow[] {
     return previewEventWindows;
   }
 
-  previewEventWindows = pattern.events
-    .filter(isPreviewRenderableEvent)
+  previewEventWindows = getDifficultyAdjustedPreviewEvents()
+    .filter(isAdjustedPreviewRenderableEvent)
     .map((event) => {
-      const adjustedEvent = getDifficultyAdjustedEvent(event);
-
       return {
-        event: adjustedEvent,
-        activeStartTime: getPreviewEventActiveStartTime(adjustedEvent),
-        activeEndTime: getEventEndTime(adjustedEvent),
+        event,
+        activeStartTime: getPreviewEventActiveStartTime(event),
+        activeEndTime: getEventEndTime(event),
       };
     })
     .sort((a, b) => a.activeStartTime - b.activeStartTime);
@@ -2545,6 +2564,15 @@ function getPreviewEventWindows(): PreviewEventWindow[] {
 
 function isPreviewRenderableEvent(event: AttackEvent): boolean {
   return !isAttackPackageEvent(event) && isEventVisibleInActiveDifficulty(event) && isParentPackageVisibleInActiveDifficulty(event);
+}
+
+function isAdjustedPreviewRenderableEvent(event: AttackEvent): boolean {
+  return !isAttackPackageEvent(event) && event.visible !== false;
+}
+
+function getDifficultyAdjustedPreviewEvents(): AttackEvent[] {
+  difficultyAdjustedPreviewEvents ??= getDifficultyAdjustedPatternEvents();
+  return difficultyAdjustedPreviewEvents;
 }
 
 function getPreviewEventActiveStartTime(event: AttackEvent): number {
@@ -3557,6 +3585,7 @@ function renderDifficultyControls(event: AttackEvent): string {
   const visible = settings.visible !== false;
   const countScale = settings.countScale ?? 1;
   const warningTimeScale = settings.warningTimeScale ?? 1;
+  const speedScale = settings.speedScale ?? 1;
 
   return `
     <section class="property-group difficulty-property-group">
@@ -3569,6 +3598,10 @@ function renderDifficultyControls(event: AttackEvent): string {
         <label class="property-field">
           <span title="現在選択中の難易度だけで、弾数や本数を倍率で増減します。">弾数倍率</span>
           <input data-difficulty-control="countScale" type="number" min="0" max="5" step="0.05" value="${formatPropertyNumber(countScale)}" />
+        </label>
+        <label class="property-field">
+          <span title="現在選択中の難易度だけで、弾やレーザーの移動速度を倍率で増減します。">速度倍率</span>
+          <input data-difficulty-control="speedScale" type="number" min="0" max="5" step="0.05" value="${formatPropertyNumber(speedScale)}" />
         </label>
         <label class="property-field">
           <span title="現在選択中の難易度だけで、予告時間を倍率で増減します。">予告時間倍率</span>
@@ -4379,6 +4412,7 @@ function normalizeDifficultySettings(value: unknown): Partial<Record<DifficultyI
       visible: typeof settings.visible === "boolean" ? settings.visible : undefined,
       countScale: normalizeScale(settings.countScale, 1),
       warningTimeScale: normalizeScale(settings.warningTimeScale, 1),
+      speedScale: normalizeScale(settings.speedScale, 1),
     };
   }
 
@@ -4395,15 +4429,27 @@ function getDifficultySettings(event: AttackEvent, difficultyId: DifficultyId): 
   return event.difficulty?.[difficultyId] ?? {};
 }
 
-function getCombinedDifficultySettings(event: AttackEvent, difficultyId: DifficultyId): Required<EventDifficultySettings> {
-  const parent = getParentPackage(event);
-  const parentSettings = parent ? getDifficultySettings(parent, difficultyId) : {};
-  const eventSettings = getDifficultySettings(event, difficultyId);
+function getSelfDifficultySettings(event: AttackEvent, difficultyId: DifficultyId): Required<EventDifficultySettings> {
+  const settings = getDifficultySettings(event, difficultyId);
 
   return {
-    visible: parentSettings.visible !== false && eventSettings.visible !== false,
-    countScale: clamp((parentSettings.countScale ?? 1) * (eventSettings.countScale ?? 1), 0, 5),
-    warningTimeScale: clamp((parentSettings.warningTimeScale ?? 1) * (eventSettings.warningTimeScale ?? 1), 0, 5),
+    visible: settings.visible !== false,
+    countScale: clamp(settings.countScale ?? 1, 0, 5),
+    warningTimeScale: clamp(settings.warningTimeScale ?? 1, 0, 5),
+    speedScale: clamp(settings.speedScale ?? 1, 0, 5),
+  };
+}
+
+function getCombinedDifficultySettings(event: AttackEvent, difficultyId: DifficultyId): Required<EventDifficultySettings> {
+  const parent = getParentPackage(event);
+  const parentSettings = parent ? getSelfDifficultySettings(parent, difficultyId) : undefined;
+  const eventSettings = getSelfDifficultySettings(event, difficultyId);
+
+  return {
+    visible: (parentSettings?.visible ?? true) && eventSettings.visible,
+    countScale: clamp((parentSettings?.countScale ?? 1) * eventSettings.countScale, 0, 5),
+    warningTimeScale: clamp((parentSettings?.warningTimeScale ?? 1) * eventSettings.warningTimeScale, 0, 5),
+    speedScale: clamp((parentSettings?.speedScale ?? 1) * eventSettings.speedScale, 0, 5),
   };
 }
 
@@ -4422,16 +4468,21 @@ function setDifficultyVisible(event: AttackEvent, visible: boolean): void {
   updateDifficultySettings(event, activeDifficultyId, { visible });
 }
 
-function getDifficultyAdjustedEvent(event: AttackEvent): AttackEvent {
+function getDifficultyAdjustedEvent(event: AttackEvent, difficultyMode: "combined" | "self" = "combined"): AttackEvent {
   const adjusted = structuredClone(event) as AttackEvent;
-  const settings = getCombinedDifficultySettings(event, activeDifficultyId);
+  const settings = difficultyMode === "self"
+    ? getSelfDifficultySettings(event, activeDifficultyId)
+    : getCombinedDifficultySettings(event, activeDifficultyId);
 
   if (!settings.visible) {
     adjusted.visible = false;
   }
 
   applyDifficultyScale(adjusted, settings.countScale, countDifficultyFields, true);
+  preservePackageCadence(adjusted, event);
   applyDifficultyScale(adjusted, settings.warningTimeScale, warningDifficultyFields, false);
+  applyDifficultyScale(adjusted, settings.speedScale, nonNegativeSpeedDifficultyFields, false);
+  applyDifficultyScale(adjusted, settings.speedScale, signedSpeedDifficultyFields, false, Number.NEGATIVE_INFINITY);
   if (adjusted.kind === "warningZone" && settings.warningTimeScale !== 1) {
     const warningEndTime = adjusted.startTime + adjusted.duration;
     adjusted.duration = Math.max(0.01, adjusted.duration * settings.warningTimeScale);
@@ -4440,7 +4491,7 @@ function getDifficultyAdjustedEvent(event: AttackEvent): AttackEvent {
   return adjusted;
 }
 
-function applyDifficultyScale(event: AttackEvent, scale: number, fields: readonly string[], integer: boolean): void {
+function applyDifficultyScale(event: AttackEvent, scale: number, fields: readonly string[], integer: boolean, minimum = 0): void {
   if (scale === 1) {
     return;
   }
@@ -4455,7 +4506,150 @@ function applyDifficultyScale(event: AttackEvent, scale: number, fields: readonl
     }
 
     const scaled = value * scale;
-    record[field] = integer ? Math.max(1, Math.round(scaled)) : Math.max(0, scaled);
+    record[field] = integer ? Math.max(minimum || 1, Math.round(scaled)) : Math.max(minimum, scaled);
+  }
+}
+
+function preservePackageCadence(adjusted: AttackEvent, source: AttackEvent): void {
+  if (!isAttackPackageEvent(adjusted) || !isAttackPackageEvent(source)) {
+    return;
+  }
+
+  const originalCount = Math.max(1, Math.round(source.packageCount));
+  const adjustedCount = Math.max(1, Math.round(adjusted.packageCount));
+
+  if (originalCount === adjustedCount) {
+    return;
+  }
+
+  if (usesPackageIntervalCadence(adjusted)) {
+    adjusted.packageInterval = getPreservedCadenceValue(source.packageInterval, originalCount, adjustedCount);
+  }
+
+  if (adjusted.kind === "package_snake_chain") {
+    adjusted.packageSpacing = getPreservedCadenceValue(source.packageSpacing, originalCount, adjustedCount);
+  }
+}
+
+function usesPackageIntervalCadence(event: AttackPackageEvent): boolean {
+  return [
+    "package_random_barrage",
+    "package_repeating_lasers",
+    "package_random_circle",
+    "package_grid_square",
+    "package_lag_radial",
+    "package_area_parallel",
+    "package_sequential_lasers",
+  ].includes(event.kind);
+}
+
+function getPreservedCadenceValue(value: number, originalCount: number, adjustedCount: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return value;
+  }
+
+  return (originalCount * value) / adjustedCount;
+}
+
+function getDifficultyAdjustedPatternEvents(): AttackEvent[] {
+  const adjustedEvents: AttackEvent[] = [];
+
+  for (const event of pattern.events) {
+    if (event.packageId) {
+      continue;
+    }
+
+    if (isAttackPackageEvent(event)) {
+      adjustedEvents.push(...getDifficultyAdjustedPackageEvents(event));
+    } else {
+      adjustedEvents.push(getDifficultyAdjustedEvent(event));
+    }
+  }
+
+  for (const event of pattern.events) {
+    if (event.packageId && !getParentPackage(event)) {
+      adjustedEvents.push(getDifficultyAdjustedEvent(event));
+    }
+  }
+
+  return adjustedEvents;
+}
+
+function getDifficultyAdjustedPackageEvents(packageEvent: AttackPackageEvent): AttackEvent[] {
+  const adjustedPackage = getDifficultyAdjustedEvent(packageEvent, "self") as AttackPackageEvent;
+  const originalChildren = getPackageChildren(packageEvent);
+
+  if (!canGeneratePackageEvents(packageEvent) || !hasPackageGenerationCountChanged(packageEvent, adjustedPackage)) {
+    return [adjustedPackage, ...originalChildren.map((child) => getDifficultyAdjustedEvent(child))];
+  }
+
+  let generatedChildren: AttackEvent[];
+  const generatorPackage = structuredClone(adjustedPackage) as AttackPackageEvent;
+
+  try {
+    generatedChildren = createGeneratedEventsForPackage(generatorPackage, pattern.stage);
+  } catch (error) {
+    console.error(error);
+    return [adjustedPackage, ...originalChildren.map((child) => getDifficultyAdjustedEvent(child))];
+  }
+
+  const originalChildLookup = createGeneratedChildStateLookup(originalChildren);
+  const generatedRoleCounts = new Map<string, number>();
+  const adjustedChildren = generatedChildren.map((child, index) => {
+    const role = getGeneratedChildRole(child);
+    const roleIndex = generatedRoleCounts.get(role) ?? 0;
+
+    generatedRoleCounts.set(role, roleIndex + 1);
+    applyGeneratedChildEditorState(child, originalChildLookup.get(`${role}:${roleIndex}`), packageEvent.id, index);
+    return getDifficultyAdjustedEvent(child, "self");
+  });
+
+  adjustedPackage.generatedEventIds = adjustedChildren.map((child) => child.id);
+  adjustedPackage.duration = generatorPackage.duration;
+  return [adjustedPackage, ...adjustedChildren];
+}
+
+function hasPackageGenerationCountChanged(source: AttackPackageEvent, adjusted: AttackPackageEvent): boolean {
+  return readRoundedPackageCount(source.packageCount) !== readRoundedPackageCount(adjusted.packageCount)
+    || readRoundedPackageCount(source.packageBulletCount) !== readRoundedPackageCount(adjusted.packageBulletCount);
+}
+
+function readRoundedPackageCount(value: number): number {
+  return Math.max(0, Math.round(Number(value) || 0));
+}
+
+function createGeneratedChildStateLookup(children: AttackEvent[]): Map<string, AttackEvent> {
+  const roleCounts = new Map<string, number>();
+  const lookup = new Map<string, AttackEvent>();
+
+  for (const child of children) {
+    const role = getGeneratedChildRole(child);
+    const roleIndex = roleCounts.get(role) ?? 0;
+
+    roleCounts.set(role, roleIndex + 1);
+    lookup.set(`${role}:${roleIndex}`, child);
+  }
+
+  return lookup;
+}
+
+function getGeneratedChildRole(child: AttackEvent): string {
+  return child.kind;
+}
+
+function applyGeneratedChildEditorState(child: AttackEvent, originalChild: AttackEvent | undefined, packageId: string, index: number): void {
+  child.id = originalChild?.id ?? `${packageId}_difficulty_${activeDifficultyId}_${index}_${child.kind}`;
+
+  if (!originalChild) {
+    return;
+  }
+
+  child.name = originalChild.name;
+  child.visible = originalChild.visible !== false && child.visible !== false;
+  child.timelineLane = originalChild.timelineLane ?? child.timelineLane;
+
+  if (originalChild.difficulty) {
+    child.difficulty = structuredClone(originalChild.difficulty);
   }
 }
 
@@ -4463,7 +4657,7 @@ function getDifficultyAdjustedPattern(): BulletPattern {
   return {
     ...pattern,
     activeDifficulty: activeDifficultyId,
-    events: pattern.events.map((event) => getDifficultyAdjustedEvent(event)),
+    events: getDifficultyAdjustedPatternEvents(),
   };
 }
 
@@ -4479,6 +4673,12 @@ function handleDifficultyControlInput(event: AttackEvent, input: HTMLInputElemen
 
     if (Number.isFinite(value)) {
       nextSettings = { countScale: value };
+    }
+  } else if (control === "speedScale") {
+    const value = clamp(Number(input.value), 0, 5);
+
+    if (Number.isFinite(value)) {
+      nextSettings = { speedScale: value };
     }
   } else if (control === "warningTimeScale") {
     const value = clamp(Number(input.value), 0, 5);
@@ -4500,6 +4700,10 @@ function handleDifficultyControlInput(event: AttackEvent, input: HTMLInputElemen
     return;
   }
 
+  if ("speedScale" in nextSettings && nextSettings.speedScale === settings.speedScale) {
+    return;
+  }
+
   if ("warningTimeScale" in nextSettings && nextSettings.warningTimeScale === settings.warningTimeScale) {
     return;
   }
@@ -4509,7 +4713,7 @@ function handleDifficultyControlInput(event: AttackEvent, input: HTMLInputElemen
     event.visible = true;
   }
   updateDifficultySettings(event, activeDifficultyId, nextSettings);
-  previewEventWindows = null;
+  invalidatePreviewRenderCache();
   clearAimCache();
   renderEverything();
 }
