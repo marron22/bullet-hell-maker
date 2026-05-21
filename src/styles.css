@@ -695,6 +695,34 @@ body.is-resizing-layout {
   justify-content: center;
 }
 
+.inline-action-button {
+  align-items: center;
+  background: #151515;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  color: #f4f4f4;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 6px;
+  justify-content: center;
+  min-height: 30px;
+  min-width: 0;
+  padding: 0 9px;
+}
+
+.inline-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.inline-action-button .icon {
+  height: 15px;
+  width: 15px;
+}
+
 .music-control,
 .music-settings-grid label {
   align-items: center;
@@ -995,9 +1023,51 @@ body.is-resizing-layout {
   margin: 0;
 }
 
+.property-group-header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.property-group-header h3 {
+  min-width: 0;
+}
+
 .property-group-fields {
   display: grid;
   gap: 7px;
+}
+
+.bulk-edit-heading {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.bulk-edit-heading strong {
+  color: #f4f4f4;
+  display: block;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bulk-edit-kicker {
+  color: #9a9a9a;
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  margin-bottom: 3px;
+}
+
+.property-field.is-mixed span::after {
+  color: #8f8f8f;
+  content: " mixed";
+  font-size: 10px;
 }
 
 .property-compact-field {

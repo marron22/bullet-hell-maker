@@ -79,10 +79,13 @@ export function createAttackEvent(kind: AttackEventKind, startTime: number, stag
         enemyWarningTime: 0.55,
         enemyStartX: stage.width / 2,
         enemyStartY: -60,
+        enemyEnterEndX: stage.width / 2,
+        enemyEnterEndY: stage.height * 0.28,
         enemyEndX: stage.width / 2,
         enemyEndY: stage.height * 0.28,
         enemyEnterTime: 0.42,
         enemyExitTime: 0.28,
+        enemyAngle: 0,
         previewEnemyTexture: null,
         previewEnemyTextureScale: 1,
       };

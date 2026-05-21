@@ -1,4 +1,5 @@
 import "./styles.css";
+import { defaultAttackColor } from "./core/colors";
 import { createAttackEvent } from "./core/eventFactory";
 import { applyAttackTemplate } from "./core/eventTemplates";
 import {
@@ -63,17 +64,19 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.17";
+const appVersion = "v0.18";
 let pattern = createStarterPattern();
 let activeDifficultyId: DifficultyId = pattern.activeDifficulty ?? "normal";
 const clock = new PlaybackClock();
 let selectedEventId: string | null = pattern.events[0]?.id ?? null;
 let selectedEventIds = new Set<string>(selectedEventId ? [selectedEventId] : []);
+let bulkEditPackageId: string | null = null;
 let timelineDragging = false;
 let markerDraggingId: string | null = null;
 let markerDragMoved = false;
 let markerDragStartX = 0;
 let markerDragOriginalTime = 0;
+let markerDragOriginalTimes = new Map<string, number>();
 let musicObjectUrl: string | null = null;
 let musicPeaks: number[] = [];
 let musicChannelData: Float32Array | null = null;
@@ -251,6 +254,7 @@ const compactFieldGroups: CompactFieldGroup[] = [
   { label: "start", fields: ["startX", "startY"] },
   { label: "end", fields: ["endX", "endY"] },
   { label: "enemyStart", fields: ["enemyStartX", "enemyStartY"] },
+  { label: "enemyEnterEnd", fields: ["enemyEnterEndX", "enemyEnterEndY"] },
   { label: "enemyEnd", fields: ["enemyEndX", "enemyEndY"] },
   { label: "polynomial", fields: ["polynomialD", "polynomialC", "polynomialB", "polynomialA"] },
 ];
@@ -261,7 +265,7 @@ const propertyGroups: PropertyGroupConfig[] = [
   { title: "Origin", numberFields: ["originX", "originY", "originVx", "originVy"] },
   { title: "Trajectory", numberFields: ["pathStartX", "pathSpeed", "polynomialA", "polynomialB", "polynomialC", "polynomialD", "gravity"] },
   { title: "Polar", numberFields: ["polarRadius", "polarRadiusVelocity", "polarTheta", "polarThetaVelocity"] },
-  { title: "Enemy Preview", numberFields: ["enemyStartX", "enemyStartY", "enemyEndX", "enemyEndY", "enemyWarningTime", "enemyEnterTime", "enemyExitTime", "originSize", "previewEnemyTextureScale"], includeColor: true },
+  { title: "Enemy Preview", numberFields: ["enemyStartX", "enemyStartY", "enemyEnterEndX", "enemyEnterEndY", "enemyEndX", "enemyEndY", "enemyAngle", "enemyWarningTime", "enemyEnterTime", "enemyExitTime", "originSize", "previewEnemyTextureScale"], includeColor: true },
   { title: "Visual", selectFields: ["typeId"], numberFields: ["visualSize", "visualWidth", "visualHeight", "visualAngle", "angleSpeed"], includeColor: true },
 ];
 
@@ -301,10 +305,13 @@ const numberFieldConfigs: NumberFieldConfig[] = [
   { name: "radialStartAngle", label: "開始角度", min: -720, max: 720, step: 5, kinds: ["spawn_radial"] },
   { name: "originSize", label: "敵サイズ", min: 4, max: 240, step: 1, kinds: ["spawn_enemy_origin"] },
   { name: "enemyWarningTime", label: "敵予告時間", min: 0, max: 5, step: 0.05, kinds: ["spawn_enemy_origin"] },
-  { name: "enemyStartX", label: "出現X", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
-  { name: "enemyStartY", label: "出現Y", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
-  { name: "enemyEndX", label: "消えるX", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
-  { name: "enemyEndY", label: "消えるY", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
+  { name: "enemyStartX", label: "出現開始X", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
+  { name: "enemyStartY", label: "出現開始Y", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
+  { name: "enemyEnterEndX", label: "出現完了X", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
+  { name: "enemyEnterEndY", label: "出現完了Y", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
+  { name: "enemyEndX", label: "消滅X", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
+  { name: "enemyEndY", label: "消滅Y", min: -1000, max: 2000, step: 1, kinds: ["spawn_enemy_origin"] },
+  { name: "enemyAngle", label: "敵表示角度", min: -720, max: 720, step: 5, kinds: ["spawn_enemy_origin"] },
   { name: "enemyEnterTime", label: "出現時間", min: 0.01, max: 5, step: 0.05, kinds: ["spawn_enemy_origin"] },
   { name: "enemyExitTime", label: "消える時間", min: 0.01, max: 5, step: 0.05, kinds: ["spawn_enemy_origin"] },
   { name: "previewEnemyTextureScale", label: "敵テクスチャ倍率", min: 0.1, max: 5, step: 0.05, kinds: ["spawn_enemy_origin"] },
@@ -504,8 +511,11 @@ const propertyDescriptions: Record<string, string> = {
   angleSpeed: "見た目を毎秒どれだけ回転させるかです。",
   enemyStartX: "敵が出現し始めるX位置です。",
   enemyStartY: "敵が出現し始めるY位置です。",
-  enemyEndX: "敵が消えるときのX位置です。",
-  enemyEndY: "敵が消えるときのY位置です。",
+  enemyEnterEndX: "敵の出現アニメーションが止まるX位置です。",
+  enemyEnterEndY: "敵の出現アニメーションが止まるY位置です。",
+  enemyEndX: "敵が消えるときに向かうX位置です。",
+  enemyEndY: "敵が消えるときに向かうY位置です。",
+  enemyAngle: "敵プレビューの見た目の角度です。",
   enemyWarningTime: "敵が出現する前に開始位置へ表示する予告時間です。",
   enemyEnterTime: "敵がびよんと大きくなって出てくる時間です。",
   enemyExitTime: "敵がひゅんと小さくなって消える時間です。",
@@ -1235,6 +1245,13 @@ propertyForm.addEventListener("click", (event) => {
     return;
   }
 
+  if (target.dataset.bulkEditClose) {
+    bulkEditPackageId = null;
+    activeInspectorTab = "package";
+    renderEverything();
+    return;
+  }
+
   const timeMode = target.dataset.timeMode;
 
   if (timeMode === "seconds" || timeMode === "beats") {
@@ -1262,10 +1279,22 @@ document.addEventListener("pointerup", stopLayoutResize);
 document.addEventListener("pointercancel", stopLayoutResize);
 
 function handlePropertyUpdate(event: Event): void {
-  const selectedEvent = getSelectedEvent();
   const input = event.target;
 
-  if (!selectedEvent || !(input instanceof HTMLInputElement || input instanceof HTMLSelectElement)) {
+  if (!(input instanceof HTMLInputElement || input instanceof HTMLSelectElement)) {
+    return;
+  }
+
+  const bulkPackage = getBulkEditPackageEvent();
+
+  if (bulkPackage && input.dataset.bulkEditField) {
+    handleBulkPackagePropertyUpdate(bulkPackage, input);
+    return;
+  }
+
+  const selectedEvent = getSelectedEvent();
+
+  if (!selectedEvent) {
     return;
   }
 
@@ -1361,6 +1390,105 @@ function handlePropertyUpdate(event: Event): void {
   syncUi();
 }
 
+function handleBulkPackagePropertyUpdate(packageEvent: AttackPackageEvent, input: HTMLInputElement | HTMLSelectElement): void {
+  const childEvents = getPackageChildren(packageEvent);
+
+  if (childEvents.length === 0) {
+    return;
+  }
+
+  const bulkFieldType = input.dataset.bulkEditField;
+
+  if (bulkFieldType === "color" && input instanceof HTMLInputElement) {
+    const nextColor = parseColorInput(input.value, childEvents[0].color);
+
+    if (childEvents.every((event) => event.color === nextColor)) {
+      return;
+    }
+
+    pushHistory();
+    for (const child of childEvents) {
+      child.color = nextColor;
+      child.packageLocked = false;
+    }
+  } else if (bulkFieldType === "select" && input instanceof HTMLSelectElement) {
+    const configs = getCommonSelectFieldConfigs(childEvents);
+    const firstConfig = configs.find((field) => field.name === input.name);
+
+    if (!firstConfig || !input.value) {
+      return;
+    }
+
+    if (childEvents.every((child) => {
+      const config = getSelectConfigsFor(child).find((field) => field.name === input.name);
+      return config && getSelectFieldValue(child, config) === input.value;
+    })) {
+      return;
+    }
+
+    pushHistory();
+    for (const child of childEvents) {
+      const config = getSelectConfigsFor(child).find((field) => field.name === input.name);
+
+      if (config) {
+        setSelectFieldValue(child, config, input.value);
+        child.packageLocked = false;
+      }
+    }
+  } else if (bulkFieldType === "checkbox" && input instanceof HTMLInputElement) {
+    const configs = getCommonCheckboxFieldConfigs(childEvents);
+    const config = configs.find((field) => field.name === input.name);
+
+    if (!config) {
+      return;
+    }
+
+    const nextValue = input.checked ? 1 : 0;
+
+    if (childEvents.every((child) => getNumberField(child, config.name) === nextValue)) {
+      return;
+    }
+
+    pushHistory();
+    for (const child of childEvents) {
+      setNumberField(child, config.name, nextValue);
+      child.packageLocked = false;
+    }
+  } else if (bulkFieldType === "number" && input instanceof HTMLInputElement) {
+    const configs = getCommonNumberFieldConfigs(childEvents);
+    const config = configs.find((field) => field.name === input.name);
+    const parsedValue = Number(input.value);
+
+    if (!config || !Number.isFinite(parsedValue)) {
+      return;
+    }
+
+    const nextValue = getStoredNumberFieldValue(config, parsedValue);
+    const clampedValue = clamp(nextValue, config.min, getFieldMax(config));
+
+    if (childEvents.every((child) => getNumberField(child, config.name) === clampedValue)) {
+      return;
+    }
+
+    pushHistory();
+    for (const child of childEvents) {
+      setNumberField(child, config.name, clampedValue);
+      child.packageLocked = false;
+    }
+  } else {
+    return;
+  }
+
+  clearAimCache();
+  sortEvents();
+  renderEventList();
+  renderTimelineMarkers();
+  renderPackagePanel();
+  renderPropertyForm();
+  renderPreview();
+  syncUi();
+}
+
 function handlePackagePanelInput(event: Event): void {
   const packageEvent = getSelectedPackageEvent();
   const input = event.target;
@@ -1431,6 +1559,21 @@ function handlePackagePanelClick(event: MouseEvent): void {
   const target = event.target;
 
   if (!(target instanceof Element)) {
+    return;
+  }
+
+  const bulkEditButton = target.closest<HTMLButtonElement>("[data-package-bulk-edit]");
+
+  if (bulkEditButton?.dataset.packageBulkEdit) {
+    const packageEvent = getPackageEventById(bulkEditButton.dataset.packageBulkEdit);
+
+    if (packageEvent) {
+      bulkEditPackageId = packageEvent.id;
+      selectSingleEvent(packageEvent.id);
+      bulkEditPackageId = packageEvent.id;
+      activeInspectorTab = "properties";
+      renderEverything();
+    }
     return;
   }
 
@@ -1662,20 +1805,106 @@ function updateMarkerTimeFromPointer(eventId: string, event: PointerEvent): void
   const bounds = timelineTrack.getBoundingClientRect();
   const ratio = clamp((event.clientX - bounds.left) / bounds.width, 0, 1);
   const rawTime = ratio * pattern.duration;
-  const previousStartTime = attackEvent.startTime;
-  attackEvent.startTime = Number(getSnappedEventTime(rawTime).toFixed(2));
-  if (isAttackPackageEvent(attackEvent)) {
-    const delta = attackEvent.startTime - previousStartTime;
+  const originalDraggedTime = markerDragOriginalTimes.get(eventId) ?? attackEvent.startTime;
+  const dragEvents = getTimelineDragEvents(eventId);
+  const rawDelta = getSnappedEventTime(rawTime) - originalDraggedTime;
+  const delta = getClampedTimelineDragDelta(dragEvents, rawDelta);
 
-    for (const child of getPackageChildren(attackEvent)) {
-      child.startTime = Number((child.startTime + delta).toFixed(2));
+  for (const draggedEvent of dragEvents) {
+    setEventTimelineDragTime(draggedEvent, delta);
+  }
+
+  for (const draggedEvent of dragEvents) {
+    if (!draggedEvent.packageId) {
+      syncTimelineMarkerElement(draggedEvent);
     }
   }
+
   clearAimCache();
 
   updateStartTimeInput(attackEvent.startTime);
   renderEventList();
   renderPreview();
+}
+
+function captureTimelineDragOriginalTimes(draggedEventId: string): Map<string, number> {
+  const originals = new Map<string, number>();
+
+  for (const event of getTimelineDragEvents(draggedEventId)) {
+    originals.set(event.id, event.startTime);
+
+    if (isAttackPackageEvent(event)) {
+      for (const child of getPackageChildren(event)) {
+        originals.set(child.id, child.startTime);
+      }
+    }
+  }
+
+  return originals;
+}
+
+function getTimelineDragEvents(draggedEventId: string): AttackEvent[] {
+  const draggedEvent = pattern.events.find((event) => event.id === draggedEventId);
+
+  if (!draggedEvent) {
+    return [];
+  }
+
+  if (!selectedEventIds.has(draggedEventId) || selectedEventIds.size <= 1) {
+    return [draggedEvent];
+  }
+
+  const selectedEvents = getSelectedEvents();
+  const selectedIds = new Set(selectedEvents.map((event) => event.id));
+
+  return selectedEvents.filter((event) => !(event.packageId && selectedIds.has(event.packageId)));
+}
+
+function getClampedTimelineDragDelta(events: AttackEvent[], rawDelta: number): number {
+  if (events.length === 0) {
+    return rawDelta;
+  }
+
+  const minDelta = Math.max(...events.map((event) => -(markerDragOriginalTimes.get(event.id) ?? event.startTime)));
+  const maxDelta = Math.min(...events.map((event) => pattern.duration - (markerDragOriginalTimes.get(event.id) ?? event.startTime)));
+
+  return Number(clamp(rawDelta, minDelta, maxDelta).toFixed(2));
+}
+
+function setEventTimelineDragTime(event: AttackEvent, delta: number): void {
+  const originalTime = markerDragOriginalTimes.get(event.id) ?? event.startTime;
+
+  event.startTime = Number(clamp(originalTime + delta, 0, pattern.duration).toFixed(2));
+
+  if (!isAttackPackageEvent(event)) {
+    return;
+  }
+
+  for (const child of getPackageChildren(event)) {
+    const originalChildTime = markerDragOriginalTimes.get(child.id) ?? child.startTime;
+    child.startTime = Number(clamp(originalChildTime + delta, 0, pattern.duration).toFixed(2));
+  }
+}
+
+function syncTimelineMarkerElement(event: AttackEvent): void {
+  const startRatio = clamp(event.startTime / pattern.duration, 0, 1);
+  const endTime = getEventEndTime(event);
+  const endRatio = clamp(endTime / pattern.duration, startRatio, 1);
+  const minimumRangeRatio = Math.min(0.01, 8 / Math.max(timelineTrack.clientWidth, 1));
+  const rangeWidthRatio = Math.max(endRatio - startRatio, minimumRangeRatio);
+  const marker = timelineTrack.querySelector<HTMLElement>(`.timeline-marker[data-timeline-event-id="${cssEscape(event.id)}"]`);
+  const range = timelineTrack.querySelector<HTMLElement>(`.timeline-event-range[data-timeline-event-id="${cssEscape(event.id)}"]`);
+
+  if (marker) {
+    marker.style.left = `${startRatio * 100}%`;
+    marker.title = `${event.name} (${event.startTime.toFixed(2)}s - ${endTime.toFixed(2)}s)`;
+  }
+
+  if (range) {
+    range.title = `${event.name} ${event.startTime.toFixed(2)}s - ${endTime.toFixed(2)}s`;
+    range.style.left = `${startRatio * 100}%`;
+    range.style.width = `${Math.min(rangeWidthRatio, 1 - startRatio) * 100}%`;
+  }
 }
 
 function exportProjectPattern(): void {
@@ -2591,7 +2820,7 @@ function getEventWarningLeadTime(event: AttackEvent): number {
   return 0;
 }
 
-type PackageHandleRole = "source" | "target" | "start" | "area" | "center" | "position" | "enemyStart" | "enemyEnd";
+type PackageHandleRole = "source" | "target" | "start" | "area" | "center" | "position" | "enemyStart" | "enemyEnterEnd" | "enemyEnd";
 
 function buildPackagePreviewHandles(): PackageHandleRender[] {
   if (editorMode === "preview") {
@@ -2611,10 +2840,17 @@ function buildPackagePreviewHandles(): PackageHandleRender[] {
         secondary: true,
       },
       {
+        id: getPackageHandleId(selectedEnemy, "enemyEnterEnd"),
+        x: clamp(selectedEnemy.enemyEnterEndX, 0, pattern.stage.width),
+        y: clamp(selectedEnemy.enemyEnterEndY, 0, pattern.stage.height),
+        color: selectedEnemy.color,
+      },
+      {
         id: getPackageHandleId(selectedEnemy, "enemyEnd"),
         x: clamp(selectedEnemy.enemyEndX, 0, pattern.stage.width),
         y: clamp(selectedEnemy.enemyEndY, 0, pattern.stage.height),
-        color: selectedEnemy.color,
+        color: 0x27dfff,
+        secondary: true,
       },
     );
   }
@@ -2694,7 +2930,7 @@ function parsePackageHandleId(handleId: string): { packageId: string; role: Pack
   const packageId = handleId.slice(0, separatorIndex);
   const role = handleId.slice(separatorIndex + 1) as PackageHandleRole;
 
-  if (!["source", "target", "start", "area", "center", "position", "enemyStart", "enemyEnd"].includes(role)) {
+  if (!["source", "target", "start", "area", "center", "position", "enemyStart", "enemyEnterEnd", "enemyEnd"].includes(role)) {
     return undefined;
   }
 
@@ -2710,7 +2946,7 @@ function handlePackageHandleDrag(handleId: string, point: { x: number; y: number
 
   const packageEvent = pattern.events.find((event): event is AttackPackageEvent => event.id === handle.packageId && isAttackPackageEvent(event));
 
-  if (handle.role === "enemyStart" || handle.role === "enemyEnd") {
+  if (handle.role === "enemyStart" || handle.role === "enemyEnterEnd" || handle.role === "enemyEnd") {
     const enemyEvent = getEnemyEventById(handle.packageId);
 
     if (!enemyEvent || editorMode === "preview") {
@@ -2756,6 +2992,9 @@ function applyEnemyHandlePoint(enemyEvent: SpawnEnemyOriginEvent, role: PackageH
   if (role === "enemyStart") {
     enemyEvent.enemyStartX = x;
     enemyEvent.enemyStartY = y;
+  } else if (role === "enemyEnterEnd") {
+    enemyEvent.enemyEnterEndX = x;
+    enemyEvent.enemyEnterEndY = y;
   } else if (role === "enemyEnd") {
     enemyEvent.enemyEndX = x;
     enemyEvent.enemyEndY = y;
@@ -3285,6 +3524,9 @@ function closeMenus(): void {
 function selectSingleEvent(eventId: string | null): void {
   selectedEventId = eventId;
   selectedEventIds = eventId ? new Set([eventId]) : new Set();
+  if (eventId !== bulkEditPackageId) {
+    bulkEditPackageId = null;
+  }
 }
 
 function toggleSelectedEvent(eventId: string): void {
@@ -3302,6 +3544,7 @@ function toggleSelectedEvent(eventId: string): void {
 
   selectedEventIds = nextSelection;
   selectedEventId = nextSelection.has(eventId) ? eventId : [...nextSelection][nextSelection.size - 1] ?? eventId;
+  bulkEditPackageId = null;
 }
 
 function selectEventFromPointer(eventId: string, pointerEvent: MouseEvent | PointerEvent): void {
@@ -3431,6 +3674,13 @@ function getEventEndTime(event: AttackEvent): number {
 }
 
 function renderPropertyForm(): void {
+  const bulkPackage = getBulkEditPackageEvent();
+
+  if (bulkPackage) {
+    propertyForm.innerHTML = renderBulkPackagePropertyForm(bulkPackage);
+    return;
+  }
+
   const selectedEvent = getSelectedEvent();
 
   if (!selectedEvent) {
@@ -3460,6 +3710,93 @@ function renderPropertyForm(): void {
     ${enemyTextureCard}
     <button id="delete-event-button" class="danger-button" type="button">Delete selected event</button>
   `;
+}
+
+function getBulkEditPackageEvent(): AttackPackageEvent | undefined {
+  if (!bulkEditPackageId) {
+    return undefined;
+  }
+
+  const packageEvent = getPackageEventById(bulkEditPackageId);
+
+  if (!packageEvent) {
+    bulkEditPackageId = null;
+    return undefined;
+  }
+
+  return packageEvent;
+}
+
+function renderBulkPackagePropertyForm(packageEvent: AttackPackageEvent): string {
+  const childEvents = getPackageChildren(packageEvent);
+  const content = childEvents.length > 0
+    ? renderBulkPackagePropertyGroups(childEvents)
+    : `<p class="empty-state">このパッケージには一括編集できるAttackがありません。</p>`;
+
+  return `
+    <div class="property-event-name bulk-edit-heading">
+      <div>
+        <span class="bulk-edit-kicker">一括編集中</span>
+        <strong>${escapeHtml(packageEvent.name)} Attacks</strong>
+      </div>
+      <button class="inline-action-button" type="button" data-bulk-edit-close="true">${iconSvg("package")}<span>パッケージへ戻る</span></button>
+    </div>
+    <div class="property-time-mode" aria-label="時間入力モード">
+      <span>timeInput</span>
+      <button class="time-mode-button ${propertyTimeMode === "seconds" ? "is-active" : ""}" type="button" data-time-mode="seconds">seconds</button>
+      <button class="time-mode-button ${propertyTimeMode === "beats" ? "is-active" : ""}" type="button" data-time-mode="beats">beats</button>
+    </div>
+    ${content}
+  `;
+}
+
+function renderBulkPackagePropertyGroups(events: AttackEvent[]): string {
+  const commonNumberFields = getCommonNumberFieldConfigs(events);
+  const commonSelectFields = getCommonSelectFieldConfigs(events);
+  const commonCheckboxFields = getCommonCheckboxFieldConfigs(events);
+  const numberFieldMap = new Map(commonNumberFields.map((field) => [field.name, field]));
+  const selectFieldMap = new Map(commonSelectFields.map((field) => [field.name, field]));
+  const checkboxFieldMap = new Map(commonCheckboxFields.map((field) => [field.name, field]));
+  let colorRendered = false;
+
+  return propertyGroups
+    .map((group) => {
+      const selectFields = (group.selectFields ?? [])
+        .map((name) => selectFieldMap.get(name))
+        .filter((field): field is SelectFieldConfig => Boolean(field))
+        .map((field) => renderBulkSelectField(events, field))
+        .join("");
+      const checkboxFields = (group.checkboxFields ?? [])
+        .map((name) => checkboxFieldMap.get(name))
+        .filter((field): field is CheckboxFieldConfig => Boolean(field))
+        .map((field) => renderBulkCheckboxField(events, field))
+        .join("");
+      const numberFields = renderBulkNumberFields(
+        events,
+        (group.numberFields ?? [])
+          .map((name) => numberFieldMap.get(name))
+          .filter((field): field is NumberFieldConfig => Boolean(field)),
+      );
+      const shouldRenderColor = !colorRendered && group.includeColor && (group.title === "Visual" || numberFields.trim());
+      const colorField = shouldRenderColor
+        ? renderBulkColorField(events)
+        : "";
+      const content = `${selectFields}${checkboxFields}${numberFields}${colorField}`;
+
+      if (!content.trim()) {
+        return "";
+      }
+
+      colorRendered = colorRendered || Boolean(colorField);
+
+      return `
+        <section class="property-group">
+          <h3>${group.title}</h3>
+          <div class="property-group-fields">${content}</div>
+        </section>
+      `;
+    })
+    .join("") || `<p class="empty-state">すべてのAttackに共通するパラメータがありません。</p>`;
 }
 
 function renderPropertyGroups(event: AttackEvent): string {
@@ -3531,7 +3868,10 @@ function renderPackagePanel(): void {
     </div>
     ${renderPackageTextureCard(packageEvent)}
     <div class="property-group">
-      <h3>Generated Attacks</h3>
+      <div class="property-group-header">
+        <h3>Generated Attacks</h3>
+        <button class="inline-action-button" type="button" data-package-bulk-edit="${packageEvent.id}" ${childEvents.length > 0 ? "" : "disabled"}>${iconSvg("sliders")}<span>一括で編集</span></button>
+      </div>
       <div class="package-child-list">
         ${childEvents.map((child) => renderPackageChildCard(child)).join("")}
       </div>
@@ -3950,6 +4290,106 @@ function renderNumberInput(event: AttackEvent, field: NumberFieldConfig, ariaLab
   `;
 }
 
+function renderBulkSelectField(events: AttackEvent[], field: SelectFieldConfig): string {
+  const value = getBulkSelectValue(events, field);
+
+  return `
+    <label class="property-field">
+      <span title="${getPropertyTooltip(field.name)}">${field.label}</span>
+      <select name="${field.name}" data-bulk-edit-field="select">
+        ${value.mixed ? '<option value="" selected disabled>mixed</option>' : ""}
+        ${field.options
+          .map((option) => `<option value="${option.value}" ${!value.mixed && option.value === value.value ? "selected" : ""}>${option.label}</option>`)
+          .join("")}
+      </select>
+    </label>
+  `;
+}
+
+function renderBulkCheckboxField(events: AttackEvent[], field: CheckboxFieldConfig): string {
+  const value = getBulkCheckboxValue(events, field.name);
+  const title = value.mixed ? `${getPropertyDescription(field.name)}\n現在は値が混在しています。` : getPropertyDescription(field.name);
+
+  return `
+    <label class="property-field property-checkbox-field ${value.mixed ? "is-mixed" : ""}">
+      <span title="${escapeHtml(title)}">${field.label}</span>
+      <input name="${field.name}" data-bulk-edit-field="checkbox" type="checkbox" ${value.value ? "checked" : ""} />
+    </label>
+  `;
+}
+
+function renderBulkColorField(events: AttackEvent[]): string {
+  const value = getBulkColorValue(events);
+
+  return `
+    <label class="property-field ${value.mixed ? "is-mixed" : ""}">
+      <span title="${getPropertyTooltip("color")}">color</span>
+      <input name="color" data-bulk-edit-field="color" type="color" value="${formatColor(value.value)}" />
+    </label>
+  `;
+}
+
+function renderBulkNumberFields(events: AttackEvent[], fields: NumberFieldConfig[]): string {
+  const renderedFields = new Set<string>();
+  const fieldByName = new Map(fields.map((field) => [field.name, field]));
+  const fragments: string[] = [];
+
+  for (const group of compactFieldGroups) {
+    const groupFields = group.fields.map((name) => fieldByName.get(name));
+
+    if (groupFields.some((field) => !field)) {
+      continue;
+    }
+
+    for (const fieldName of group.fields) {
+      renderedFields.add(fieldName);
+    }
+
+    fragments.push(`
+      <label class="property-field property-compact-field">
+        <span title="${getCompactFieldTooltip(group.fields)}">${group.label}</span>
+        <div class="compact-inputs" style="--input-count: ${group.fields.length}">
+          ${groupFields.map((field) => renderBulkNumberInput(events, field!, getDisplayFieldLabel(field!))).join("")}
+        </div>
+      </label>
+    `);
+  }
+
+  for (const field of fields) {
+    if (renderedFields.has(field.name)) {
+      continue;
+    }
+
+    fragments.push(`
+      <label class="property-field">
+        <span title="${getPropertyTooltip(field.name)}">${getDisplayFieldLabel(field)}</span>
+        ${renderBulkNumberInput(events, field)}
+      </label>
+    `);
+  }
+
+  return fragments.join("");
+}
+
+function renderBulkNumberInput(events: AttackEvent[], field: NumberFieldConfig, ariaLabel = field.name): string {
+  const value = getBulkNumberValue(events, field);
+
+  return `
+    <input
+      name="${field.name}"
+      data-bulk-edit-field="number"
+      type="number"
+      min="${getDisplayFieldMin(field)}"
+      max="${getDisplayFieldMax(field)}"
+      step="${getDisplayFieldStep(field)}"
+      value="${value.mixed ? "" : value.value}"
+      placeholder="${value.mixed ? "mixed" : ""}"
+      aria-label="${ariaLabel}"
+      title="${getPropertyTooltip(field.name)}"
+    />
+  `;
+}
+
 function renderTimelineMarkers(): void {
   const laneCount = getTimelineLaneCount();
 
@@ -3979,6 +4419,7 @@ function renderTimelineMarkers(): void {
     const range = document.createElement("div");
 
     range.className = `timeline-event-range ${isSelectedEvent(event) ? "is-selected" : ""} ${isMutedByEditMode ? "is-muted" : ""} ${!isVisible ? "is-hidden" : ""}`;
+    range.dataset.timelineEventId = event.id;
     range.title = `${event.name} ${event.startTime.toFixed(2)}s - ${endTime.toFixed(2)}s`;
     range.style.left = `${startRatio * 100}%`;
     range.style.width = `${Math.min(rangeWidthRatio, 1 - startRatio) * 100}%`;
@@ -3988,13 +4429,22 @@ function renderTimelineMarkers(): void {
 
     marker.type = "button";
     marker.className = `timeline-marker ${isSelectedEvent(event) ? "is-selected" : ""} ${isMutedByEditMode ? "is-muted" : ""} ${!isVisible ? "is-hidden" : ""}`;
+    marker.dataset.timelineEventId = event.id;
     marker.title = `${event.name} (${event.startTime.toFixed(2)}s - ${endTime.toFixed(2)}s)`;
     marker.style.left = `${startRatio * 100}%`;
     marker.style.setProperty("--marker-color", formatColor(event.color));
     marker.style.setProperty("--timeline-lane-index", String(laneIndex));
     marker.addEventListener("pointerdown", (pointerEvent) => {
       pointerEvent.stopPropagation();
-      selectEventFromPointer(event.id, pointerEvent);
+      const keepMultiSelection = !pointerEvent.ctrlKey && !pointerEvent.metaKey && selectedEventIds.size > 1 && selectedEventIds.has(event.id);
+
+      if (!keepMultiSelection) {
+        selectEventFromPointer(event.id, pointerEvent);
+      } else {
+        selectedEventId = event.id;
+        bulkEditPackageId = null;
+      }
+
       if (editorMode === "trajectory") {
         editingEventId = getTrajectoryEditableEvent(event)?.id ?? null;
       }
@@ -4009,6 +4459,7 @@ function renderTimelineMarkers(): void {
       markerDragHistoryRecorded = false;
       markerDragStartX = pointerEvent.clientX;
       markerDragOriginalTime = event.startTime;
+      markerDragOriginalTimes = captureTimelineDragOriginalTimes(event.id);
       marker.setPointerCapture(pointerEvent.pointerId);
       renderEventList();
       renderPropertyForm();
@@ -4030,19 +4481,6 @@ function renderTimelineMarkers(): void {
 
       markerDragMoved = true;
       updateMarkerTimeFromPointer(event.id, pointerEvent);
-      {
-        const nextStartRatio = clamp(event.startTime / pattern.duration, 0, 1);
-        const nextEndTime = getEventEndTime(event);
-        const nextEndRatio = clamp(nextEndTime / pattern.duration, nextStartRatio, 1);
-        const nextMinimumRangeRatio = Math.min(0.01, 8 / Math.max(timelineTrack.clientWidth, 1));
-        const nextRangeWidthRatio = Math.max(nextEndRatio - nextStartRatio, nextMinimumRangeRatio);
-
-        marker.style.left = `${nextStartRatio * 100}%`;
-        marker.title = `${event.name} (${event.startTime.toFixed(2)}s - ${nextEndTime.toFixed(2)}s)`;
-        range.title = `${event.name} ${event.startTime.toFixed(2)}s - ${nextEndTime.toFixed(2)}s`;
-        range.style.left = `${nextStartRatio * 100}%`;
-        range.style.width = `${Math.min(nextRangeWidthRatio, 1 - nextStartRatio) * 100}%`;
-      }
     });
     marker.addEventListener("pointerup", (pointerEvent) => {
       if (markerDraggingId !== event.id) {
@@ -4051,6 +4489,7 @@ function renderTimelineMarkers(): void {
 
       markerDraggingId = null;
       markerDragHistoryRecorded = false;
+      markerDragOriginalTimes.clear();
 
       if (!markerDragMoved) {
         event.startTime = markerDragOriginalTime;
@@ -4066,6 +4505,7 @@ function renderTimelineMarkers(): void {
     marker.addEventListener("pointercancel", (pointerEvent) => {
       markerDraggingId = null;
       markerDragHistoryRecorded = false;
+      markerDragOriginalTimes.clear();
 
       if (marker.hasPointerCapture(pointerEvent.pointerId)) {
         marker.releasePointerCapture(pointerEvent.pointerId);
@@ -4107,6 +4547,50 @@ function getSelectConfigsFor(event: AttackEvent): SelectFieldConfig[] {
 
 function getCheckboxConfigsFor(event: AttackEvent): CheckboxFieldConfig[] {
   return checkboxFieldConfigs.filter((field) => field.kinds.includes(event.kind));
+}
+
+function getCommonNumberFieldConfigs(events: AttackEvent[]): NumberFieldConfig[] {
+  return getCommonFieldConfigs(events, getFieldConfigsFor);
+}
+
+function getCommonSelectFieldConfigs(events: AttackEvent[]): SelectFieldConfig[] {
+  return getCommonFieldConfigs(events, getSelectConfigsFor);
+}
+
+function getCommonCheckboxFieldConfigs(events: AttackEvent[]): CheckboxFieldConfig[] {
+  return getCommonFieldConfigs(events, getCheckboxConfigsFor);
+}
+
+function getCommonFieldConfigs<TField extends { name: string }>(
+  events: AttackEvent[],
+  getConfigs: (event: AttackEvent) => TField[],
+): TField[] {
+  if (events.length === 0) {
+    return [];
+  }
+
+  const commonNames = new Set(getConfigs(events[0]).map((field) => field.name));
+
+  for (const event of events.slice(1)) {
+    const eventFieldNames = new Set(getConfigs(event).map((field) => field.name));
+
+    for (const name of [...commonNames]) {
+      if (!eventFieldNames.has(name)) {
+        commonNames.delete(name);
+      }
+    }
+  }
+
+  const renderedNames = new Set<string>();
+
+  return getConfigs(events[0]).filter((field) => {
+    if (!commonNames.has(field.name) || renderedNames.has(field.name)) {
+      return false;
+    }
+
+    renderedNames.add(field.name);
+    return true;
+  });
 }
 
 function getSelectFieldValue(event: AttackEvent, field: SelectFieldConfig): string {
@@ -4284,6 +4768,47 @@ function getNumberField(event: AttackEvent, field: string): number {
   return Number((event as unknown as Record<string, number>)[field] ?? 0);
 }
 
+function getBulkNumberValue(events: AttackEvent[], field: NumberFieldConfig): { mixed: boolean; value: string } {
+  const firstValue = getNumberField(events[0], field.name);
+  const mixed = events.some((event) => getNumberField(event, field.name) !== firstValue);
+  const displayValue = mixed ? "" : getDisplayNumberValue(firstValue, field);
+
+  return { mixed, value: displayValue };
+}
+
+function getDisplayNumberValue(value: number, field: NumberFieldConfig): string {
+  if (propertyTimeMode !== "beats" || !isTimeField(field.name)) {
+    return formatPropertyNumber(value);
+  }
+
+  if (field.name === "startTime") {
+    return formatPropertyNumber(secondsToBeat(value));
+  }
+
+  return formatPropertyNumber(secondsToBeatDuration(value));
+}
+
+function getBulkSelectValue(events: AttackEvent[], field: SelectFieldConfig): { mixed: boolean; value: string } {
+  const firstValue = getSelectFieldValue(events[0], field);
+  const mixed = events.some((event) => getSelectFieldValue(event, field) !== firstValue);
+
+  return { mixed, value: firstValue };
+}
+
+function getBulkCheckboxValue(events: AttackEvent[], fieldName: string): { mixed: boolean; value: boolean } {
+  const firstValue = getNumberField(events[0], fieldName) > 0;
+  const mixed = events.some((event) => (getNumberField(event, fieldName) > 0) !== firstValue);
+
+  return { mixed, value: firstValue };
+}
+
+function getBulkColorValue(events: AttackEvent[]): { mixed: boolean; value: number } {
+  const firstValue = events[0]?.color ?? defaultAttackColor;
+  const mixed = events.some((event) => event.color !== firstValue);
+
+  return { mixed, value: firstValue };
+}
+
 function setNumberField(event: AttackEvent, field: string, value: number): void {
   (event as unknown as Record<string, number>)[field] = value;
 }
@@ -4353,8 +4878,11 @@ function ensureEventEditorFields(event: AttackEvent): void {
 
   if (event.kind === "spawn_enemy_origin") {
     event.enemyWarningTime = Number.isFinite(event.enemyWarningTime) ? Math.max(0, event.enemyWarningTime) : 0.55;
+    event.enemyEnterEndX = Number.isFinite(event.enemyEnterEndX) ? event.enemyEnterEndX : event.enemyEndX;
+    event.enemyEnterEndY = Number.isFinite(event.enemyEnterEndY) ? event.enemyEnterEndY : event.enemyEndY;
     event.previewEnemyTextureScale = clamp(Number(event.previewEnemyTextureScale) || 1, 0.1, 5);
     event.previewEnemyTexture = event.previewEnemyTexture?.dataUrl ? event.previewEnemyTexture : null;
+    event.enemyAngle = Number.isFinite(event.enemyAngle) ? event.enemyAngle : 0;
   }
 }
 
@@ -5413,6 +5941,10 @@ function hasMusic(): boolean {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function cssEscape(value: string): string {
+  return typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(value) : value.replace(/["\\]/g, "\\$&");
 }
 
 function isEditingTarget(target: EventTarget | null): boolean {

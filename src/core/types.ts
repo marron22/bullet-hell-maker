@@ -192,10 +192,13 @@ export interface SpawnEnemyOriginEvent extends BaseAttackEvent, BulletMotionFiel
   enemyWarningTime: number;
   enemyStartX: number;
   enemyStartY: number;
+  enemyEnterEndX: number;
+  enemyEnterEndY: number;
   enemyEndX: number;
   enemyEndY: number;
   enemyEnterTime: number;
   enemyExitTime: number;
+  enemyAngle: number;
   previewEnemyTexture?: PreviewImageAsset | null;
   previewEnemyTextureScale?: number;
 }

@@ -269,11 +269,7 @@ function buildSpawnEnemyOrigin(event: SpawnEnemyOriginEvent, time: number) {
   }
 
   const duration = Math.max(0.05, event.duration);
-  const progress = clamp(age / duration, 0, 1);
-  const point = {
-    x: lerp(event.enemyStartX, event.enemyEndX, easeInOut(progress)),
-    y: lerp(event.enemyStartY, event.enemyEndY, easeInOut(progress)),
-  };
+  const point = getEnemyPreviewPoint(event, age, duration);
   const scale = getEnemyPreviewScale(event, age, duration);
 
   if (scale <= 0.01) {
@@ -285,10 +281,39 @@ function buildSpawnEnemyOrigin(event: SpawnEnemyOriginEvent, time: number) {
     x: point.x,
     y: point.y,
     radius: event.originSize * scale,
-    rotation: degreesToRadians(event.polarTheta + event.polarThetaVelocity * age),
+    rotation: degreesToRadians(event.enemyAngle),
     sides: 4,
     color: event.color,
     alpha: 0.95 * Math.min(1, scale),
+  };
+}
+
+function getEnemyPreviewPoint(event: SpawnEnemyOriginEvent, age: number, duration: number): { x: number; y: number } {
+  const enterTime = Math.max(0.01, event.enemyEnterTime);
+  const exitTime = Math.max(0.01, event.enemyExitTime);
+  const exitStart = Math.max(enterTime, duration - exitTime);
+
+  if (age < enterTime) {
+    const progress = easeOut(clamp(age / enterTime, 0, 1));
+
+    return {
+      x: lerp(event.enemyStartX, event.enemyEnterEndX, progress),
+      y: lerp(event.enemyStartY, event.enemyEnterEndY, progress),
+    };
+  }
+
+  if (age >= exitStart && exitStart < duration) {
+    const progress = easeInOut(clamp((age - exitStart) / Math.max(0.01, duration - exitStart), 0, 1));
+
+    return {
+      x: lerp(event.enemyEnterEndX, event.enemyEndX, progress),
+      y: lerp(event.enemyEnterEndY, event.enemyEndY, progress),
+    };
+  }
+
+  return {
+    x: event.enemyEnterEndX,
+    y: event.enemyEnterEndY,
   };
 }
 
