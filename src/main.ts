@@ -64,7 +64,7 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.22";
+const appVersion = "v0.23";
 const previewTextureScaleMin = 0.1;
 const previewTextureScaleMax = 50;
 let pattern = createStarterPattern();
@@ -139,7 +139,7 @@ const previewDashSpeed = 1120;
 const previewDashDuration = 0.13;
 const previewDashCooldown = 0.34;
 const previewDashAcceleration = 34;
-const previewMoveAcceleration = 18;
+const previewMoveAcceleration = 28;
 const previewStopDamping = 22;
 const minimumTimelineLaneCount = 1;
 const maximumTimelineLaneCount = 12;
