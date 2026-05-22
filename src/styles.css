@@ -126,9 +126,9 @@ button:disabled {
 
 .brand {
   display: grid;
-  gap: 2px;
+  gap: 4px;
   margin-right: 8px;
-  min-width: 150px;
+  min-width: 190px;
 }
 
 .brand-title {
@@ -139,6 +139,24 @@ button:disabled {
 .brand-subtitle {
   color: #9b9b9b;
   font-size: 11px;
+}
+
+.project-title-input {
+  background: #070707;
+  border: 1px solid #303030;
+  border-radius: 4px;
+  color: #f4f4f4;
+  font: inherit;
+  font-size: 12px;
+  min-height: 24px;
+  min-width: 0;
+  padding: 0 7px;
+  width: 180px;
+}
+
+.project-title-input:focus {
+  border-color: #f82469;
+  outline: none;
 }
 
 .toolbar-spacer {
@@ -1469,11 +1487,15 @@ body.is-resizing-layout {
   }
 
   .brand {
-    min-width: 120px;
+    min-width: 150px;
   }
 
   .brand-subtitle {
     display: none;
+  }
+
+  .project-title-input {
+    width: 150px;
   }
 
   .workspace {

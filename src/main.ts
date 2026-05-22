@@ -76,7 +76,7 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.25";
+const appVersion = "v0.26";
 const previewTextureScaleMin = 0.1;
 const previewTextureScaleMax = 50;
 const defaultUnityBulletTypeName = "normal";
@@ -103,6 +103,7 @@ let projectMusicAsset: ProjectMusicAsset | null = null;
 const projectCustomPackageAssets = new Map<string, ProjectCustomPackageAsset>();
 let timelineZoom = 1;
 let markerDragHistoryRecorded = false;
+let projectTitleEditHistoryRecorded = false;
 let snapToMeasures = false;
 let propertyTimeMode: "seconds" | "beats" = "seconds";
 let editingEventId: string | null = null;
@@ -557,6 +558,7 @@ appRoot.innerHTML = `
     <header class="toolbar">
       <div class="brand">
         <div class="brand-title">弾幕メーカー ${appVersion}</div>
+        <input id="project-title-input" class="project-title-input" type="text" value="${escapeHtml(pattern.title)}" aria-label="プロジェクトタイトル" spellcheck="false" />
       </div>
       <nav class="menu-bar" aria-label="メインメニュー">
         <div class="menu">
@@ -715,6 +717,7 @@ const previewHost = requireElement<HTMLDivElement>("#preview-host");
 const previewPanel = requireElement<HTMLElement>(".preview-panel");
 const trajectoryModeNotice = requireElement<HTMLDivElement>("#trajectory-mode-notice");
 const appShell = requireElement<HTMLDivElement>(".app-shell");
+const projectTitleInput = requireElement<HTMLInputElement>("#project-title-input");
 const playButton = requireElement<HTMLButtonElement>("#play-button");
 const resetButton = requireElement<HTMLButtonElement>("#reset-button");
 const previewLightweightToggleButton = requireElement<HTMLButtonElement>("#preview-lightweight-toggle-button");
@@ -954,6 +957,46 @@ undoButton.addEventListener("click", () => {
 redoButton.addEventListener("click", () => {
   closeMenus();
   redoPatternChange();
+});
+
+projectTitleInput.addEventListener("focus", () => {
+  projectTitleEditHistoryRecorded = false;
+});
+
+projectTitleInput.addEventListener("input", () => {
+  if (projectTitleInput.value === pattern.title) {
+    return;
+  }
+
+  if (!projectTitleEditHistoryRecorded) {
+    pushHistory();
+    projectTitleEditHistoryRecorded = true;
+  }
+
+  pattern.title = projectTitleInput.value;
+  syncUi();
+});
+
+projectTitleInput.addEventListener("blur", () => {
+  const nextTitle = projectTitleInput.value.trim() || "Untitled Pattern";
+
+  if (nextTitle !== pattern.title) {
+    if (!projectTitleEditHistoryRecorded) {
+      pushHistory();
+    }
+
+    pattern.title = nextTitle;
+  }
+
+  projectTitleEditHistoryRecorded = false;
+  projectTitleInput.value = pattern.title;
+  syncUi();
+});
+
+projectTitleInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    projectTitleInput.blur();
+  }
 });
 
 snapToggleButton.addEventListener("click", () => {
@@ -2030,7 +2073,7 @@ function exportProjectPattern(): void {
     customPackages: getProjectCustomPackageAssets(),
   };
 
-  downloadJson(projectPattern, `${pattern.title.replace(/[^\w-]+/g, "_") || "danmaku_project"}.project.json`);
+  downloadJson(projectPattern, `${getProjectFileBaseName("danmaku_project")}.project.json`);
 }
 
 function getProjectCustomPackageAssets(): ProjectCustomPackageAsset[] {
@@ -2045,7 +2088,7 @@ function getProjectCustomPackageAssets(): ProjectCustomPackageAsset[] {
 
 function exportUnityPattern(): void {
   const unityExport = buildUnitySeparatedExport(getDifficultyAdjustedPattern());
-  const baseName = pattern.title.replace(/[^\w-]+/g, "_") || "danmaku_pattern";
+  const baseName = getProjectFileBaseName("danmaku_pattern");
 
   downloadJson(unityExport.stageData, `${baseName}.stagedata.json`);
   downloadJson(unityExport.bulletBufferCollection, `${baseName}.bulletbuffers.json`);
@@ -2056,7 +2099,7 @@ function exportUnityPattern(): void {
 }
 
 function exportAllDifficultiesUnityZip(): void {
-  const baseName = pattern.title.replace(/[^\w-]+/g, "_") || "danmaku_pattern";
+  const baseName = getProjectFileBaseName("danmaku_pattern");
   const files: ZipTextFile[] = [];
 
   for (const difficultyId of difficultyIds) {
@@ -2081,6 +2124,18 @@ function exportAllDifficultiesUnityZip(): void {
   }
 
   downloadBlob(createZipBlob(files), `${baseName}_unity_all_difficulties.zip`);
+}
+
+function getProjectFileBaseName(fallback: string): string {
+  const normalized = pattern.title
+    .trim()
+    .normalize("NFKC")
+    .replace(/[<>:"/\\|?*\x00-\x1f]+/g, "_")
+    .replace(/\s+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^[._]+|[._]+$/g, "");
+
+  return normalized || fallback;
 }
 
 function buildUnitySeparatedExportForDifficulty(difficultyId: DifficultyId): ReturnType<typeof buildUnitySeparatedExport> {
@@ -3794,6 +3849,10 @@ function syncUi(): void {
   const isPreviewMode = editorMode === "preview";
   appShell.classList.toggle("is-preview-mode", isPreviewMode);
   appShell.classList.toggle("is-preview-timeline-hidden", isPreviewMode && !previewTimelineVisible);
+  if (document.activeElement !== projectTitleInput && projectTitleInput.value !== pattern.title) {
+    projectTitleInput.value = pattern.title;
+  }
+
   for (const button of editorModeButtons) {
     const isActive = button.dataset.editorMode === editorMode;
 
