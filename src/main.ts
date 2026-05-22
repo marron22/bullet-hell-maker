@@ -99,7 +99,7 @@ type SerialApiLike = EventTarget & {
   requestPort(): Promise<SerialPortLike>;
 };
 
-const appVersion = "v0.30";
+const appVersion = "v0.31";
 const previewTextureScaleMin = 0.1;
 const previewTextureScaleMax = 50;
 const defaultUnityBulletTypeName = "normal";

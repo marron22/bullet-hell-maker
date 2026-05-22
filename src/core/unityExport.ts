@@ -106,8 +106,8 @@ export interface UnitySeparatedExport {
   skippedEvents: Array<{ id: string; name: string; kind: string; reason: string }>;
 }
 
-const unityWorldWidth = 18;
-const unityWorldHeight = 36;
+const unityWorldWidth = 32;
+const unityWorldHeight = 18;
 const unityLaserOverscanMultiplier = 1.25;
 const polynomialUnitPixels = 100;
 const defaultUnityBulletTypeName = "normal";

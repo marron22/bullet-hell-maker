@@ -1,4 +1,4 @@
-# 弾幕メーカー v0.30
+# 弾幕メーカー v0.31
 
 JSaB風の回避アクションゲーム向けに、弾幕やレーザー、危険領域をタイムライン上で作成・確認するためのブラウザツールです。
 
@@ -29,10 +29,9 @@ https://marron22.github.io/bullet-hell-maker/
 - プロパティ: 選択中の通常攻撃、またはパッケージ内の子攻撃を細かく編集します。
 - 音楽: 音楽読み込み、音量、BPM、1小節の時間を設定します。
 
-## v0.30 更新
+## v0.31 更新
 
-- プレビューモードで Web Serial API 入力に対応しました。ESP32-S3 などから送られるジョイスティック / ボタン入力で移動とダッシュを確認できます。
-- ESP32-S3-DevKitC-1、Ultimarc J-Stik、OBSF-30 向けの PlatformIO ファームを `firmware/esp32-s3-serial-controller` に追加しました。
+- Unity 向け書き出しの座標変換を、左下原点の 32 x 18 ワールドに修正しました。
 
 ## パッケージ
 
@@ -56,7 +55,7 @@ https://marron22.github.io/bullet-hell-maker/
 
 プロジェクトを後から再編集したい場合は、必ず「プロジェクト書き出し」を使ってください。
 
-Unity向け書き出しでは、StageData 側の `bulletSpawners[].clipName` が BulletBuffers 側の `bulletBuffers[].name` を参照します。座標はプレビュー画面を Unity 側の左下原点、右上 `(18, 36)` のワールドとして扱い、Y軸は Unity に合わせて上向きに変換します。
+Unity向け書き出しでは、StageData 側の `bulletSpawners[].clipName` が BulletBuffers 側の `bulletBuffers[].name` を参照します。座標はプレビュー画面を Unity 側の左下原点、右上 `(32, 18)` のワールドとして扱い、Y軸は Unity に合わせて上向きに変換します。
 
 通常の丸弾は Unity 側の `normal` として扱われるように `typeId: 1` / `typeName: "normal"` で出力します。レーザーは Unity 側の `box` として出力し、画面範囲より長く伸ばす前提で長さを補正します。太さは `bulletSpawners[].laserWidth` で調整します。
 
