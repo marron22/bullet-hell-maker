@@ -64,7 +64,9 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.21";
+const appVersion = "v0.22";
+const previewTextureScaleMin = 0.1;
+const previewTextureScaleMax = 50;
 let pattern = createStarterPattern();
 let activeDifficultyId: DifficultyId = pattern.activeDifficulty ?? "normal";
 const clock = new PlaybackClock();
@@ -314,7 +316,7 @@ const numberFieldConfigs: NumberFieldConfig[] = [
   { name: "enemyAngle", label: "敵表示角度", min: -720, max: 720, step: 5, kinds: ["spawn_enemy_origin"] },
   { name: "enemyEnterTime", label: "出現時間", min: 0.01, max: 5, step: 0.05, kinds: ["spawn_enemy_origin"] },
   { name: "enemyExitTime", label: "消える時間", min: 0.01, max: 5, step: 0.05, kinds: ["spawn_enemy_origin"] },
-  { name: "previewEnemyTextureScale", label: "敵テクスチャ倍率", min: 0.1, max: 5, step: 0.05, kinds: ["spawn_enemy_origin"] },
+  { name: "previewEnemyTextureScale", label: "敵テクスチャ倍率", min: previewTextureScaleMin, max: previewTextureScaleMax, step: 0.05, kinds: ["spawn_enemy_origin"] },
   { name: "previewEnemyTextureAngle", label: "敵テクスチャ角度", min: -720, max: 720, step: 5, kinds: ["spawn_enemy_origin"] },
   { name: "laserCount", label: "レーザー本数", min: 1, max: 64, step: 1, integer: true, kinds: ["spawn_curved_laser"] },
   { name: "laserAngleStepDeg", label: "レーザー角度間隔", min: -360, max: 360, step: 1, kinds: ["spawn_curved_laser"] },
@@ -1507,7 +1509,7 @@ function handlePackagePanelLiveInput(event: Event): void {
 
 function handlePackageTextureDisplayInput(packageEvent: AttackPackageEvent, input: HTMLInputElement): boolean {
   if (input.name === "previewBulletTextureScale") {
-    const nextScale = clamp(Number(input.value), 0.1, 5);
+    const nextScale = clamp(Number(input.value), previewTextureScaleMin, previewTextureScaleMax);
 
     if (!Number.isFinite(nextScale) || nextScale === getPackageBulletTextureScale(packageEvent)) {
       return true;
@@ -2738,7 +2740,8 @@ function ensureEditModeState(): void {
 
 function renderPreview(): void {
   syncTrajectoryModeNotice();
-  const previewEvents = getPreviewEvents(clock.time);
+  const texturePreview = applyBulletTextureVisualSizeScale(getPreviewEvents(clock.time));
+  const previewEvents = texturePreview.events;
   const playerPosition = preview.getPlayerPosition();
   const frame = buildAttackFrame(previewEvents, clock.time, pattern.stage, playerPosition);
   const packageHandles = buildPackagePreviewHandles();
@@ -2754,7 +2757,7 @@ function renderPreview(): void {
     currentTime: clock.time,
     duration: pattern.duration,
     events: previewEvents,
-    bulletTexturesByEventId: buildPreviewBulletTextureMap(previewEvents),
+    bulletTexturesByEventId: buildPreviewBulletTextureMap(previewEvents, texturePreview.visualSizeScaledEventIds),
     enemyTexturesByEventId: buildPreviewEnemyTextureMap(previewEvents),
     selectedEventId,
     editEventId: editingEventId,
@@ -2766,7 +2769,48 @@ function renderPreview(): void {
   });
 }
 
-function buildPreviewBulletTextureMap(events: AttackEvent[]): Map<string, { dataUrl: string; scale: number; angleDeg: number }> {
+function applyBulletTextureVisualSizeScale(events: AttackEvent[]): { events: AttackEvent[]; visualSizeScaledEventIds: Set<string> } {
+  const visualSizeScaledEventIds = new Set<string>();
+  let scaledEvents: AttackEvent[] | null = null;
+
+  events.forEach((event, index) => {
+    if (!isTextureVisualSizeScalableEvent(event)) {
+      return;
+    }
+
+    const parentPackage = getParentPackage(event);
+
+    if (!parentPackage?.previewBulletTexture?.dataUrl) {
+      return;
+    }
+
+    const scale = getPackageBulletTextureScale(parentPackage);
+
+    if (scale === 1) {
+      return;
+    }
+
+    if (!scaledEvents) {
+      scaledEvents = [...events];
+    }
+
+    const scaledEvent = structuredClone(event) as AttackEvent & { visualSize: number };
+    scaledEvent.visualSize = Math.max(1, scaledEvent.visualSize * scale);
+    scaledEvents[index] = scaledEvent;
+    visualSizeScaledEventIds.add(event.id);
+  });
+
+  return { events: scaledEvents ?? events, visualSizeScaledEventIds };
+}
+
+function isTextureVisualSizeScalableEvent(event: AttackEvent): event is AttackEvent & { typeId: number; visualSize: number } {
+  return "typeId" in event
+    && "visualSize" in event
+    && Math.round(Number(event.typeId) || 0) === 0
+    && Number.isFinite(Number(event.visualSize));
+}
+
+function buildPreviewBulletTextureMap(events: AttackEvent[], visualSizeScaledEventIds = new Set<string>()): Map<string, { dataUrl: string; scale: number; angleDeg: number }> {
   const texturesByEventId = new Map<string, { dataUrl: string; scale: number; angleDeg: number }>();
 
   for (const event of events) {
@@ -2776,7 +2820,7 @@ function buildPreviewBulletTextureMap(events: AttackEvent[]): Map<string, { data
     if (dataUrl) {
       texturesByEventId.set(event.id, {
         dataUrl,
-        scale: getPackageBulletTextureScale(parentPackage),
+        scale: visualSizeScaledEventIds.has(event.id) ? 1 : getPackageBulletTextureScale(parentPackage),
         angleDeg: getPackageBulletTextureAngle(parentPackage),
       });
     }
@@ -2802,7 +2846,7 @@ function buildPreviewEnemyTextureMap(events: AttackEvent[]): Map<string, { dataU
 }
 
 function getPackageBulletTextureScale(packageEvent: AttackPackageEvent): number {
-  return clamp(Number(packageEvent.previewBulletTextureScale) || 1, 0.1, 5);
+  return clamp(Number(packageEvent.previewBulletTextureScale) || 1, previewTextureScaleMin, previewTextureScaleMax);
 }
 
 function getPackageBulletTextureAngle(packageEvent: AttackPackageEvent): number {
@@ -2812,7 +2856,7 @@ function getPackageBulletTextureAngle(packageEvent: AttackPackageEvent): number 
 }
 
 function getEnemyTextureScale(enemyEvent: SpawnEnemyOriginEvent): number {
-  return clamp(Number(enemyEvent.previewEnemyTextureScale) || 1, 0.1, 5);
+  return clamp(Number(enemyEvent.previewEnemyTextureScale) || 1, previewTextureScaleMin, previewTextureScaleMax);
 }
 
 function getEnemyTextureAngle(enemyEvent: SpawnEnemyOriginEvent): number {
@@ -3973,8 +4017,8 @@ function renderPackageTextureCard(packageEvent: AttackPackageEvent): string {
         <p class="preview-texture-display ${hasTexture ? "has-texture" : ""}">${escapeHtml(asset?.name ?? "No texture")}</p>
       </div>
       <label class="property-field">
-        <span title="このパッケージのテクスチャ弾だけをプレビューで拡大縮小します。">表示倍率</span>
-        <input name="previewBulletTextureScale" type="number" min="0.1" max="5" step="0.05" value="${formatPropertyNumber(textureScale)}" />
+        <span title="このパッケージのテクスチャ弾だけ、各弾の基本サイズに倍率を掛けてプレビューします。">表示倍率</span>
+        <input name="previewBulletTextureScale" type="number" min="${previewTextureScaleMin}" max="${previewTextureScaleMax}" step="0.05" value="${formatPropertyNumber(textureScale)}" />
       </label>
       <label class="property-field">
         <span title="このパッケージのテクスチャ弾だけに追加する表示角度です。">テクスチャ角度</span>
@@ -4964,7 +5008,7 @@ function ensureEventEditorFields(event: AttackEvent): void {
   }
 
   if (isAttackPackageEvent(event)) {
-    event.previewBulletTextureScale = clamp(Number(event.previewBulletTextureScale) || 1, 0.1, 5);
+    event.previewBulletTextureScale = clamp(Number(event.previewBulletTextureScale) || 1, previewTextureScaleMin, previewTextureScaleMax);
     event.previewBulletTextureAngle = getPackageBulletTextureAngle(event);
   }
 
@@ -4972,7 +5016,7 @@ function ensureEventEditorFields(event: AttackEvent): void {
     event.enemyWarningTime = Number.isFinite(event.enemyWarningTime) ? Math.max(0, event.enemyWarningTime) : 0.55;
     event.enemyEnterEndX = Number.isFinite(event.enemyEnterEndX) ? event.enemyEnterEndX : event.enemyEndX;
     event.enemyEnterEndY = Number.isFinite(event.enemyEnterEndY) ? event.enemyEnterEndY : event.enemyEndY;
-    event.previewEnemyTextureScale = clamp(Number(event.previewEnemyTextureScale) || 1, 0.1, 5);
+    event.previewEnemyTextureScale = clamp(Number(event.previewEnemyTextureScale) || 1, previewTextureScaleMin, previewTextureScaleMax);
     event.previewEnemyTextureAngle = getEnemyTextureAngle(event);
     event.previewEnemyTexture = event.previewEnemyTexture?.dataUrl ? event.previewEnemyTexture : null;
     event.enemyAngle = Number.isFinite(event.enemyAngle) ? event.enemyAngle : 0;
