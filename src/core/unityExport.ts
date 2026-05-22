@@ -697,7 +697,7 @@ function typeNameFromTypeId(typeId: number): string {
     case 3:
       return "diamond";
     case 4:
-      return "laser";
+      return "box";
     case 0:
     default:
       return defaultUnityBulletTypeName;

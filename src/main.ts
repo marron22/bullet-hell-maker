@@ -76,7 +76,16 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.28";
+type PreviewGamepadInput = {
+  connected: boolean;
+  active: boolean;
+  name: string;
+  x: number;
+  y: number;
+  dashPressed: boolean;
+};
+
+const appVersion = "v0.29";
 const previewTextureScaleMin = 0.1;
 const previewTextureScaleMax = 50;
 const defaultUnityBulletTypeName = "normal";
@@ -116,6 +125,7 @@ let dashCooldownRemaining = 0;
 let playerWasHit = false;
 const pressedPreviewKeys = new Set<string>();
 const lastPreviewDirection = { x: 0, y: -1 };
+let previewGamepadDashWasPressed = false;
 let timelinePanelHeight = 220;
 let inspectorPanelWidth = 380;
 let activeResizeTarget: "timeline" | "inspector" | null = null;
@@ -155,6 +165,14 @@ const previewDashCooldown = 0.34;
 const previewDashAcceleration = 34;
 const previewMoveAcceleration = 28;
 const previewStopDamping = 22;
+const previewGamepadDeadzone = 0.18;
+const previewGamepadButtonThreshold = 0.5;
+const previewGamepadDirectionButtonIndexes = {
+  up: 12,
+  down: 13,
+  left: 14,
+  right: 15,
+} as const;
 const minimumTimelineLaneCount = 1;
 const maximumTimelineLaneCount = 12;
 const difficultyIds = ["easy", "normal", "lunatic"] as const;
@@ -611,6 +629,7 @@ appRoot.innerHTML = `
       <div class="preview-options" aria-label="プレビュー設定">
         <button id="preview-lightweight-toggle-button" class="preview-option-button is-active" type="button" aria-pressed="true" title="プレビューの軽量化">${iconSvg("pulse")}<span>軽量</span></button>
         <button id="preview-timeline-toggle-button" class="preview-option-button is-active" type="button" aria-pressed="true" title="タイムライン表示">${iconSvg("eye")}<span>タイムライン</span></button>
+        <span id="gamepad-status" class="gamepad-status" title="プレビューモードでは、接続したゲームパッドのスティック / 方向ボタンで移動し、通常ボタンでダッシュできます。">パッド: 未検出</span>
       </div>
       <div class="hidden-inputs">
         <input id="import-input" type="file" accept="application/json,.json" hidden />
@@ -722,6 +741,7 @@ const playButton = requireElement<HTMLButtonElement>("#play-button");
 const resetButton = requireElement<HTMLButtonElement>("#reset-button");
 const previewLightweightToggleButton = requireElement<HTMLButtonElement>("#preview-lightweight-toggle-button");
 const previewTimelineToggleButton = requireElement<HTMLButtonElement>("#preview-timeline-toggle-button");
+const gamepadStatus = requireElement<HTMLSpanElement>("#gamepad-status");
 const exportButton = requireElement<HTMLButtonElement>("#export-button");
 const exportUnityButton = requireElement<HTMLButtonElement>("#export-unity-button");
 const exportUnityAllButton = requireElement<HTMLButtonElement>("#export-unity-all-button");
@@ -1263,6 +1283,15 @@ document.addEventListener("keyup", (event) => {
   }
 
   pressedPreviewKeys.delete(event.code);
+});
+
+window.addEventListener("gamepadconnected", () => {
+  syncGamepadStatus(readPreviewGamepadInput());
+});
+
+window.addEventListener("gamepaddisconnected", () => {
+  previewGamepadDashWasPressed = false;
+  syncGamepadStatus(readPreviewGamepadInput());
 });
 
 timelineTrack.addEventListener("pointerdown", (event) => {
@@ -3043,6 +3072,7 @@ function setEditorMode(mode: EditorMode): void {
     dashRequested = false;
     dashTimeRemaining = 0;
     dashCooldownRemaining = 0;
+    previewGamepadDashWasPressed = false;
     previewPlayerVelocity.x = 0;
     previewPlayerVelocity.y = 0;
     playerWasHit = false;
@@ -3059,6 +3089,7 @@ function setEditorMode(mode: EditorMode): void {
     }
   } else {
     pressedPreviewKeys.clear();
+    previewGamepadDashWasPressed = false;
     previewPlayerVelocity.x = 0;
     previewPlayerVelocity.y = 0;
     preview.setPointerControlEnabled(editorMode === "global");
@@ -3645,7 +3676,17 @@ function getFixedPreviewPlayerPosition(): { x: number; y: number } {
 }
 
 function updatePreviewPlayer(deltaSeconds: number): void {
-  const direction = getPreviewMoveDirection();
+  const gamepadInput = readPreviewGamepadInput();
+
+  syncGamepadStatus(gamepadInput);
+
+  if (gamepadInput.dashPressed && !previewGamepadDashWasPressed) {
+    dashRequested = true;
+  }
+
+  previewGamepadDashWasPressed = gamepadInput.dashPressed;
+
+  const direction = getPreviewMoveDirection(gamepadInput);
   const hasDirection = Math.hypot(direction.x, direction.y) > 0.001;
 
   if (hasDirection) {
@@ -3688,7 +3729,7 @@ function updatePreviewPlayer(deltaSeconds: number): void {
   preview.movePlayer(previewPlayerVelocity.x * deltaSeconds, previewPlayerVelocity.y * deltaSeconds);
 }
 
-function getPreviewMoveDirection(): { x: number; y: number } {
+function getPreviewMoveDirection(gamepadInput: PreviewGamepadInput): { x: number; y: number } {
   let x = 0;
   let y = 0;
 
@@ -3708,9 +3749,106 @@ function getPreviewMoveDirection(): { x: number; y: number } {
     y += 1;
   }
 
+  const keyboardLength = Math.hypot(x, y);
+
+  if (keyboardLength > 0) {
+    x /= keyboardLength;
+    y /= keyboardLength;
+  }
+
+  x += gamepadInput.x;
+  y += gamepadInput.y;
+
   const length = Math.hypot(x, y);
 
-  return length > 0 ? { x: x / length, y: y / length } : { x: 0, y: 0 };
+  if (length > 1) {
+    return { x: x / length, y: y / length };
+  }
+
+  return length > 0 ? { x, y } : { x: 0, y: 0 };
+}
+
+function readPreviewGamepadInput(): PreviewGamepadInput {
+  if (typeof navigator.getGamepads !== "function") {
+    return createEmptyPreviewGamepadInput();
+  }
+
+  const gamepad = navigator.getGamepads().find((candidate): candidate is Gamepad => Boolean(candidate));
+
+  if (!gamepad) {
+    return createEmptyPreviewGamepadInput();
+  }
+
+  const axisX = applyPreviewGamepadDeadzone(gamepad.axes[0] ?? 0);
+  const axisY = applyPreviewGamepadDeadzone(gamepad.axes[1] ?? 0);
+  const dpadX =
+    (isGamepadButtonPressed(gamepad.buttons[previewGamepadDirectionButtonIndexes.right]) ? 1 : 0) -
+    (isGamepadButtonPressed(gamepad.buttons[previewGamepadDirectionButtonIndexes.left]) ? 1 : 0);
+  const dpadY =
+    (isGamepadButtonPressed(gamepad.buttons[previewGamepadDirectionButtonIndexes.down]) ? 1 : 0) -
+    (isGamepadButtonPressed(gamepad.buttons[previewGamepadDirectionButtonIndexes.up]) ? 1 : 0);
+  let x = axisX + dpadX;
+  let y = axisY + dpadY;
+  const directionLength = Math.hypot(x, y);
+
+  if (directionLength > 1) {
+    x /= directionLength;
+    y /= directionLength;
+  }
+
+  const dashPressed = gamepad.buttons.some((button, index) => !isGamepadDirectionButtonIndex(index) && isGamepadButtonPressed(button));
+
+  return {
+    connected: true,
+    active: Math.hypot(x, y) > 0.001 || dashPressed,
+    name: gamepad.id || "Gamepad",
+    x,
+    y,
+    dashPressed,
+  };
+}
+
+function createEmptyPreviewGamepadInput(): PreviewGamepadInput {
+  return {
+    connected: false,
+    active: false,
+    name: "",
+    x: 0,
+    y: 0,
+    dashPressed: false,
+  };
+}
+
+function applyPreviewGamepadDeadzone(value: number): number {
+  const magnitude = Math.abs(value);
+
+  if (magnitude < previewGamepadDeadzone) {
+    return 0;
+  }
+
+  return Math.sign(value) * ((magnitude - previewGamepadDeadzone) / (1 - previewGamepadDeadzone));
+}
+
+function isGamepadButtonPressed(button: GamepadButton | undefined): boolean {
+  return Boolean(button?.pressed) || Number(button?.value ?? 0) >= previewGamepadButtonThreshold;
+}
+
+function isGamepadDirectionButtonIndex(index: number): boolean {
+  return Object.values(previewGamepadDirectionButtonIndexes).some((buttonIndex) => buttonIndex === index);
+}
+
+function syncGamepadStatus(input: PreviewGamepadInput): void {
+  gamepadStatus.classList.toggle("is-connected", input.connected);
+  gamepadStatus.classList.toggle("is-active", input.active);
+
+  if (!input.connected) {
+    gamepadStatus.textContent = "パッド: 未検出";
+    gamepadStatus.title = "プレビューモードでは、接続したゲームパッドのスティック / 方向ボタンで移動し、通常ボタンでダッシュできます。";
+    return;
+  }
+
+  gamepadStatus.textContent = input.active ? "パッド: 入力中" : "パッド: 接続中";
+  gamepadStatus.title = `${input.name}\nスティック / 方向ボタン: 移動\n通常ボタン: ダッシュ`;
 }
 
 function isPreviewControlCode(code: string): boolean {
