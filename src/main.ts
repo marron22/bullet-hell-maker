@@ -43,6 +43,13 @@ interface ProjectPreviewSettings {
   bulletTexture?: PreviewImageAsset | null;
 }
 
+interface BulletTextureTypeNameEntry {
+  key: string;
+  asset: PreviewImageAsset;
+  typeName: string;
+  packageEvents: AttackPackageEvent[];
+}
+
 type ProjectPatternFile = Partial<BulletPattern> & {
   music?: ProjectMusicAsset | null;
   customPackages?: ProjectCustomPackageAsset[];
@@ -64,9 +71,10 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.23";
+const appVersion = "v0.24";
 const previewTextureScaleMin = 0.1;
 const previewTextureScaleMax = 50;
+const defaultUnityBulletTypeName = "normal";
 let pattern = createStarterPattern();
 let activeDifficultyId: DifficultyId = pattern.activeDifficulty ?? "normal";
 const clock = new PlaybackClock();
@@ -93,7 +101,7 @@ let markerDragHistoryRecorded = false;
 let snapToMeasures = false;
 let propertyTimeMode: "seconds" | "beats" = "seconds";
 let editingEventId: string | null = null;
-let activeInspectorTab: "events" | "package" | "properties" | "music" = "events";
+let activeInspectorTab: "events" | "package" | "properties" | "textures" | "music" = "events";
 type EditorMode = "global" | "trajectory" | "preview";
 let editorMode: EditorMode = "global";
 let dashRequested = false;
@@ -680,9 +688,17 @@ document.querySelector<HTMLElement>(".inspector-tabs")?.children[0]?.insertAdjac
   "afterend",
   `<button class="inspector-tab-button" type="button" data-inspector-tab="package" role="tab" aria-selected="false">${iconSvg("box")}<span>パッケージ</span></button>`,
 );
+document.querySelector<HTMLElement>("[data-inspector-tab='package']")?.insertAdjacentHTML(
+  "afterend",
+  `<button class="inspector-tab-button" type="button" data-inspector-tab="textures" role="tab" aria-selected="false">${iconSvg("image")}<span>テクスチャ</span></button>`,
+);
 document.querySelector<HTMLElement>("#events-tab-panel")?.insertAdjacentHTML(
   "afterend",
   '<section id="package-tab-panel" class="inspector-tab-panel" data-inspector-panel="package" role="tabpanel" hidden><div id="package-panel" class="package-panel"></div></section>',
+);
+document.querySelector<HTMLElement>("#package-tab-panel")?.insertAdjacentHTML(
+  "afterend",
+  '<section id="textures-tab-panel" class="inspector-tab-panel texture-type-panel" data-inspector-panel="textures" role="tabpanel" hidden><div id="texture-type-name-panel" class="texture-type-name-panel"></div></section>',
 );
 document.querySelector<HTMLElement>(".timeline-panel")?.insertAdjacentHTML("afterbegin", '<div id="timeline-resize-handle" class="timeline-resize-handle" aria-hidden="true"></div>');
 
@@ -712,6 +728,7 @@ const timeDisplay = requireElement<HTMLDivElement>("#time-display");
 const musicDisplay = requireElement<HTMLDivElement>("#music-display");
 const eventList = requireElement<HTMLDivElement>("#event-list");
 const packagePanel = requireElement<HTMLDivElement>("#package-panel");
+const textureTypeNamePanel = requireElement<HTMLDivElement>("#texture-type-name-panel");
 const propertyForm = requireElement<HTMLFormElement>("#property-form");
 const timelineViewport = requireElement<HTMLDivElement>("#timeline-viewport");
 const timelineContent = requireElement<HTMLDivElement>("#timeline-content");
@@ -770,7 +787,7 @@ inspectorTabButtons.forEach((button) => {
   button.addEventListener("click", () => {
     const nextTab = button.dataset.inspectorTab;
 
-    if (nextTab === "events" || nextTab === "package" || nextTab === "properties" || nextTab === "music") {
+    if (nextTab === "events" || nextTab === "package" || nextTab === "properties" || nextTab === "textures" || nextTab === "music") {
       activeInspectorTab = nextTab;
       renderInspectorTabs();
     }
@@ -1277,6 +1294,7 @@ packagePanel.addEventListener("input", handlePackagePanelLiveInput);
 packagePanel.addEventListener("change", handlePackagePanelInput);
 packagePanel.addEventListener("click", handlePackagePanelClick);
 packagePanel.addEventListener("dblclick", handlePackagePanelDoubleClick);
+textureTypeNamePanel.addEventListener("change", handleTextureTypeNamePanelInput);
 timelineResizeHandle.addEventListener("pointerdown", (event) => startLayoutResize("timeline", event));
 inspectorResizeHandle.addEventListener("pointerdown", (event) => startLayoutResize("inspector", event));
 document.addEventListener("pointermove", handleLayoutResizeMove);
@@ -1594,6 +1612,43 @@ function handlePackagePanelInput(event: Event): void {
   selectSingleEvent(packageEvent.id);
   clearAimCache();
   renderEverything();
+}
+
+function handleTextureTypeNamePanelInput(event: Event): void {
+  const input = event.target;
+
+  if (!(input instanceof HTMLInputElement) || !input.dataset.textureTypeNameKey) {
+    return;
+  }
+
+  const entry = getBulletTextureTypeNameEntries().find((candidate) => candidate.key === input.dataset.textureTypeNameKey);
+
+  if (!entry) {
+    return;
+  }
+
+  const nextTypeName = sanitizeUnityTypeName(input.value, getDefaultUnityTypeNameForTexture(entry.asset));
+
+  if (nextTypeName === entry.typeName) {
+    input.value = nextTypeName;
+    return;
+  }
+
+  pushHistory();
+  for (const packageEvent of entry.packageEvents) {
+    if (!packageEvent.previewBulletTexture?.dataUrl) {
+      continue;
+    }
+
+    packageEvent.previewBulletTexture = {
+      ...packageEvent.previewBulletTexture,
+      unityTypeName: nextTypeName,
+    };
+  }
+
+  renderPackagePanel();
+  renderTextureTypeNamePanel();
+  syncUi();
 }
 
 function handlePackagePanelClick(event: MouseEvent): void {
@@ -2431,13 +2486,15 @@ async function loadPackageBulletTexture(packageEvent: AttackPackageEvent, file: 
 }
 
 async function setPackageBulletTextureAsset(packageEvent: AttackPackageEvent, asset: PreviewImageAsset | null): Promise<void> {
+  const normalizedAsset = normalizePreviewImageAsset(asset);
+
   pushHistory();
-  packageEvent.previewBulletTexture = asset;
+  packageEvent.previewBulletTexture = normalizedAsset;
   packageEvent.previewBulletTextureScale = getPackageBulletTextureScale(packageEvent);
   invalidatePreviewRenderCache();
 
-  if (asset?.dataUrl) {
-    void preview.loadBulletTexture(asset.dataUrl)
+  if (normalizedAsset?.dataUrl) {
+    void preview.loadBulletTexture(normalizedAsset.dataUrl)
       .then(() => renderPreview())
       .catch((error) => {
         console.warn("Package bullet texture could not be loaded for preview.", error);
@@ -2445,6 +2502,7 @@ async function setPackageBulletTextureAsset(packageEvent: AttackPackageEvent, as
   }
 
   renderPackagePanel();
+  renderTextureTypeNamePanel();
   renderPreview();
   syncUi();
 }
@@ -2454,6 +2512,7 @@ function clearPackageBulletTexture(packageEvent: AttackPackageEvent): void {
   packageEvent.previewBulletTexture = null;
   invalidatePreviewRenderCache();
   renderPackagePanel();
+  renderTextureTypeNamePanel();
   renderPreview();
   syncUi();
 }
@@ -2536,7 +2595,7 @@ function migrateLegacyPreviewBulletTexture(asset: PreviewImageAsset | null): voi
   }
 
   for (const packageEvent of packageEvents) {
-    packageEvent.previewBulletTexture = asset;
+    packageEvent.previewBulletTexture = normalizePreviewImageAsset(asset);
   }
 }
 
@@ -2567,11 +2626,66 @@ function buildProjectImageAsset(file: File): Promise<PreviewImageAsset> {
         name: file.name,
         type: file.type,
         dataUrl: String(reader.result ?? ""),
+        unityTypeName: getDefaultUnityTypeNameForTextureName(file.name),
       });
     });
     reader.addEventListener("error", () => reject(reader.error ?? new Error("Image file could not be read.")));
     reader.readAsDataURL(file);
   });
+}
+
+function normalizePreviewImageAsset(value: unknown): PreviewImageAsset | null {
+  if (!isRecord(value) || typeof value.dataUrl !== "string" || !value.dataUrl) {
+    return null;
+  }
+
+  const name = typeof value.name === "string" && value.name.trim() ? value.name : "texture";
+  const type = typeof value.type === "string" ? value.type : "";
+  const fallbackTypeName = getDefaultUnityTypeNameForTextureName(name);
+
+  return {
+    name,
+    type,
+    dataUrl: value.dataUrl,
+    unityTypeName: sanitizeUnityTypeName(value.unityTypeName, fallbackTypeName),
+  };
+}
+
+function getPreviewImageUnityTypeName(asset: PreviewImageAsset): string {
+  return sanitizeUnityTypeName(asset.unityTypeName, getDefaultUnityTypeNameForTexture(asset));
+}
+
+function getDefaultUnityTypeNameForTexture(asset: PreviewImageAsset): string {
+  return getDefaultUnityTypeNameForTextureName(asset.name);
+}
+
+function getDefaultUnityTypeNameForTextureName(name: string | undefined): string {
+  const baseName = (name ?? "").replace(/\.[^.\\/]+$/u, "");
+
+  return sanitizeUnityTypeName(baseName.toLowerCase(), defaultUnityBulletTypeName);
+}
+
+function sanitizeUnityTypeName(value: unknown, fallback = defaultUnityBulletTypeName): string {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  return value.trim().replace(/[^A-Za-z0-9_-]+/gu, "_").replace(/^[-_]+|[-_]+$/gu, "") || fallback;
+}
+
+function getPreviewTextureKey(asset: PreviewImageAsset): string {
+  return `texture_${hashString(asset.dataUrl)}`;
+}
+
+function hashString(value: string): string {
+  let hash = 2166136261;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return (hash >>> 0).toString(36);
 }
 
 function buildProjectMusicAsset(file: File): Promise<ProjectMusicAsset> {
@@ -2627,6 +2741,7 @@ function renderEverything(): void {
   renderInspectorTabs();
   renderEventList();
   renderPackagePanel();
+  renderTextureTypeNamePanel();
   renderPropertyForm();
   renderTimelineMarkers();
   syncTimelineInputs();
@@ -4004,11 +4119,72 @@ function renderPackagePanel(): void {
   `;
 }
 
+function renderTextureTypeNamePanel(): void {
+  const entries = getBulletTextureTypeNameEntries();
+
+  if (entries.length === 0) {
+    textureTypeNamePanel.innerHTML = '<div class="empty-state">弾テクスチャなし</div>';
+    return;
+  }
+
+  textureTypeNamePanel.innerHTML = `
+    <div class="texture-type-list">
+      ${entries.map(renderTextureTypeNameCard).join("")}
+    </div>
+  `;
+}
+
+function renderTextureTypeNameCard(entry: BulletTextureTypeNameEntry): string {
+  const packageNames = entry.packageEvents.map((event) => event.name).join(", ");
+
+  return `
+    <article class="texture-type-card">
+      <div class="texture-type-card-main">
+        <strong>${escapeHtml(entry.asset.name || "Texture")}</strong>
+        <span>${escapeHtml(packageNames)}</span>
+      </div>
+      <label class="property-field texture-type-name-field">
+        <span title="Unity 書き出し時に、このテクスチャ弾へ設定する typeName です。">typeName</span>
+        <input data-texture-type-name-key="${escapeHtml(entry.key)}" type="text" value="${escapeHtml(entry.typeName)}" spellcheck="false" />
+      </label>
+    </article>
+  `;
+}
+
+function getBulletTextureTypeNameEntries(): BulletTextureTypeNameEntry[] {
+  const entries = new Map<string, BulletTextureTypeNameEntry>();
+
+  for (const packageEvent of pattern.events) {
+    if (!isAttackPackageEvent(packageEvent) || !packageEvent.previewBulletTexture?.dataUrl) {
+      continue;
+    }
+
+    const asset = packageEvent.previewBulletTexture;
+    const key = getPreviewTextureKey(asset);
+    let entry = entries.get(key);
+
+    if (!entry) {
+      entry = {
+        key,
+        asset,
+        typeName: getPreviewImageUnityTypeName(asset),
+        packageEvents: [],
+      };
+      entries.set(key, entry);
+    }
+
+    entry.packageEvents.push(packageEvent);
+  }
+
+  return [...entries.values()].sort((a, b) => a.asset.name.localeCompare(b.asset.name, "ja"));
+}
+
 function renderPackageTextureCard(packageEvent: AttackPackageEvent): string {
   const asset = packageEvent.previewBulletTexture;
   const hasTexture = Boolean(asset?.dataUrl);
   const textureScale = getPackageBulletTextureScale(packageEvent);
   const textureAngle = getPackageBulletTextureAngle(packageEvent);
+  const textureTypeName = asset?.dataUrl ? getPreviewImageUnityTypeName(asset) : defaultUnityBulletTypeName;
 
   return `
     <div class="preview-texture-card package-texture-card">
@@ -4016,6 +4192,10 @@ function renderPackageTextureCard(packageEvent: AttackPackageEvent): string {
         <h3>弾テクスチャ</h3>
         <p class="preview-texture-display ${hasTexture ? "has-texture" : ""}">${escapeHtml(asset?.name ?? "No texture")}</p>
       </div>
+      <label class="property-field">
+        <span title="Unity 書き出し時に、このテクスチャ弾へ設定する typeName です。">typeName</span>
+        <input type="text" value="${escapeHtml(textureTypeName)}" readonly />
+      </label>
       <label class="property-field">
         <span title="このパッケージのテクスチャ弾だけ、各弾の基本サイズに倍率を掛けてプレビューします。">表示倍率</span>
         <input name="previewBulletTextureScale" type="number" min="${previewTextureScaleMin}" max="${previewTextureScaleMax}" step="0.05" value="${formatPropertyNumber(textureScale)}" />
@@ -5008,6 +5188,7 @@ function ensureEventEditorFields(event: AttackEvent): void {
   }
 
   if (isAttackPackageEvent(event)) {
+    event.previewBulletTexture = normalizePreviewImageAsset(event.previewBulletTexture);
     event.previewBulletTextureScale = clamp(Number(event.previewBulletTextureScale) || 1, previewTextureScaleMin, previewTextureScaleMax);
     event.previewBulletTextureAngle = getPackageBulletTextureAngle(event);
   }
@@ -5018,7 +5199,7 @@ function ensureEventEditorFields(event: AttackEvent): void {
     event.enemyEnterEndY = Number.isFinite(event.enemyEnterEndY) ? event.enemyEnterEndY : event.enemyEndY;
     event.previewEnemyTextureScale = clamp(Number(event.previewEnemyTextureScale) || 1, previewTextureScaleMin, previewTextureScaleMax);
     event.previewEnemyTextureAngle = getEnemyTextureAngle(event);
-    event.previewEnemyTexture = event.previewEnemyTexture?.dataUrl ? event.previewEnemyTexture : null;
+    event.previewEnemyTexture = normalizePreviewImageAsset(event.previewEnemyTexture);
     event.enemyAngle = Number.isFinite(event.enemyAngle) ? event.enemyAngle : 0;
   }
 }

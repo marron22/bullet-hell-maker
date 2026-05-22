@@ -118,6 +118,7 @@ const unityWorldWidth = 18;
 const unityWorldHeight = 36;
 const unityLaserOverscanMultiplier = 1.25;
 const polynomialUnitPixels = 100;
+const defaultUnityBulletTypeName = "normal";
 
 export function buildUnitySeparatedExport(pattern: BulletPattern): UnitySeparatedExport {
   const context: ExportContext = {
@@ -128,6 +129,7 @@ export function buildUnitySeparatedExport(pattern: BulletPattern): UnitySeparate
     spawners: [],
     skippedEvents: [],
     usedNames: new Set<string>(),
+    packageById: new Map(pattern.events.filter(isAttackPackageEvent).map((event) => [event.id, event])),
   };
 
   for (const event of getUnityExportEvents(pattern.events)) {
@@ -167,6 +169,7 @@ interface ExportContext {
   spawners: UnityBulletSpawnerJson[];
   skippedEvents: UnitySeparatedExport["skippedEvents"];
   usedNames: Set<string>;
+  packageById: Map<string, AttackPackageEvent>;
 }
 
 function getUnityExportEvents(events: AttackEvent[]): AttackEvent[] {
@@ -549,7 +552,7 @@ function createUnityBulletData(
     nowCalculateX: startX,
     polynomial,
     typeId,
-    typeName: typeNameFromTypeId(editorTypeId),
+    typeName: typeNameForMotion(context, motion, editorTypeId),
     size,
     color: colorToFloat4(motion.color),
     areaNum: 0,
@@ -709,7 +712,7 @@ function toUnityBulletTypeId(editorTypeId: number): number {
 function typeNameFromTypeId(typeId: number): string {
   switch (typeId) {
     case 1:
-      return "normal";
+      return defaultUnityBulletTypeName;
     case 2:
       return "box";
     case 3:
@@ -718,8 +721,40 @@ function typeNameFromTypeId(typeId: number): string {
       return "laser";
     case 0:
     default:
-      return "normal";
+      return defaultUnityBulletTypeName;
   }
+}
+
+function typeNameForMotion(context: ExportContext, motion: BulletMotionFields, editorTypeId: number): string {
+  return getTextureUnityTypeName(context, motion, editorTypeId) ?? typeNameFromTypeId(editorTypeId);
+}
+
+function getTextureUnityTypeName(context: ExportContext, motion: BulletMotionFields, editorTypeId: number): string | undefined {
+  if (editorTypeId !== 0 || !("packageId" in motion) || typeof motion.packageId !== "string") {
+    return undefined;
+  }
+
+  const texture = context.packageById.get(motion.packageId)?.previewBulletTexture;
+
+  if (!texture?.dataUrl) {
+    return undefined;
+  }
+
+  return sanitizeUnityTypeName(texture.unityTypeName, defaultUnityTypeNameFromTextureName(texture.name));
+}
+
+function defaultUnityTypeNameFromTextureName(name: string | undefined): string {
+  const baseName = (name ?? "").replace(/\.[^.\\/]+$/u, "");
+
+  return sanitizeUnityTypeName(baseName.toLowerCase(), defaultUnityBulletTypeName);
+}
+
+function sanitizeUnityTypeName(value: unknown, fallback = defaultUnityBulletTypeName): string {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  return value.trim().replace(/[^A-Za-z0-9_-]+/gu, "_").replace(/^[-_]+|[-_]+$/gu, "") || fallback;
 }
 
 function getInitialPolynomialVelocity(polynomial: Float4, x: number, speed: number): Float2 {

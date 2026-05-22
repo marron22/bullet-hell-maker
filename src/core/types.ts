@@ -59,6 +59,7 @@ export interface PreviewImageAsset {
   name: string;
   type: string;
   dataUrl: string;
+  unityTypeName?: string;
 }
 
 export type DifficultyId = "easy" | "normal" | "lunatic";

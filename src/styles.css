@@ -519,7 +519,7 @@ button:disabled {
   border-radius: 5px;
   display: grid;
   gap: 3px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   padding: 3px;
 }
 
@@ -630,6 +630,51 @@ button:disabled {
   display: grid;
   gap: 8px;
   grid-template-columns: 1fr auto;
+}
+
+.texture-type-panel,
+.texture-type-name-panel {
+  min-width: 0;
+  overflow: auto;
+}
+
+.texture-type-list {
+  display: grid;
+  gap: 8px;
+  padding-right: 3px;
+}
+
+.texture-type-card {
+  background: #111111;
+  border: 1px solid #303030;
+  border-radius: 5px;
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.texture-type-card-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.texture-type-card-main strong,
+.texture-type-card-main span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.texture-type-card-main strong {
+  color: #f4f4f4;
+  font-size: 13px;
+}
+
+.texture-type-card-main span {
+  color: #929292;
+  font-size: 12px;
 }
 
 .inspector-resize-handle {
