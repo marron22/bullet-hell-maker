@@ -50,6 +50,11 @@ interface BulletTextureTypeNameEntry {
   packageEvents: AttackPackageEvent[];
 }
 
+interface ZipTextFile {
+  name: string;
+  data: string;
+}
+
 type ProjectPatternFile = Partial<BulletPattern> & {
   music?: ProjectMusicAsset | null;
   customPackages?: ProjectCustomPackageAsset[];
@@ -71,7 +76,7 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.24";
+const appVersion = "v0.25";
 const previewTextureScaleMin = 0.1;
 const previewTextureScaleMax = 50;
 const defaultUnityBulletTypeName = "normal";
@@ -683,6 +688,10 @@ document.querySelector<HTMLElement>("#export-button")?.insertAdjacentHTML(
   "afterend",
   `<button id="export-unity-button" class="menu-item" type="button">${iconSvg("download")}<span>Unity向け書き出し</span></button>`,
 );
+document.querySelector<HTMLElement>("#export-unity-button")?.insertAdjacentHTML(
+  "afterend",
+  `<button id="export-unity-all-button" class="menu-item" type="button">${iconSvg("archive")}<span>全難易度Unity ZIP</span></button>`,
+);
 document.querySelector<HTMLElement>(".inspector-panel")?.insertAdjacentHTML("afterbegin", '<div id="inspector-resize-handle" class="inspector-resize-handle" aria-hidden="true"></div>');
 document.querySelector<HTMLElement>(".inspector-tabs")?.children[0]?.insertAdjacentHTML(
   "afterend",
@@ -712,6 +721,7 @@ const previewLightweightToggleButton = requireElement<HTMLButtonElement>("#previ
 const previewTimelineToggleButton = requireElement<HTMLButtonElement>("#preview-timeline-toggle-button");
 const exportButton = requireElement<HTMLButtonElement>("#export-button");
 const exportUnityButton = requireElement<HTMLButtonElement>("#export-unity-button");
+const exportUnityAllButton = requireElement<HTMLButtonElement>("#export-unity-all-button");
 const importButton = requireElement<HTMLButtonElement>("#import-button");
 const importAiBeatmapButton = requireElement<HTMLButtonElement>("#import-ai-beatmap-button");
 const importPackageButton = requireElement<HTMLButtonElement>("#import-package-button");
@@ -909,6 +919,11 @@ exportButton.addEventListener("click", () => {
 exportUnityButton.addEventListener("click", () => {
   closeMenus();
   exportUnityPattern();
+});
+
+exportUnityAllButton.addEventListener("click", () => {
+  closeMenus();
+  exportAllDifficultiesUnityZip();
 });
 
 importButton.addEventListener("click", () => {
@@ -2040,9 +2055,55 @@ function exportUnityPattern(): void {
   }
 }
 
+function exportAllDifficultiesUnityZip(): void {
+  const baseName = pattern.title.replace(/[^\w-]+/g, "_") || "danmaku_pattern";
+  const files: ZipTextFile[] = [];
+
+  for (const difficultyId of difficultyIds) {
+    const unityExport = buildUnitySeparatedExportForDifficulty(difficultyId);
+    const difficultyLabel = difficultyLabels[difficultyId];
+    const filePrefix = `${difficultyLabel}/${baseName}_${difficultyLabel}`;
+
+    files.push(
+      {
+        name: `${filePrefix}.stagedata.json`,
+        data: stringifyJson(unityExport.stageData),
+      },
+      {
+        name: `${filePrefix}.bulletbuffers.json`,
+        data: stringifyJson(unityExport.bulletBufferCollection),
+      },
+    );
+
+    if (unityExport.skippedEvents.length > 0) {
+      console.warn(`${difficultyLabel}: Some events could not be represented in the Unity StageData/BulletBuffer export.`, unityExport.skippedEvents);
+    }
+  }
+
+  downloadBlob(createZipBlob(files), `${baseName}_unity_all_difficulties.zip`);
+}
+
+function buildUnitySeparatedExportForDifficulty(difficultyId: DifficultyId): ReturnType<typeof buildUnitySeparatedExport> {
+  const previousDifficultyId = activeDifficultyId;
+
+  activeDifficultyId = difficultyId;
+
+  try {
+    return buildUnitySeparatedExport(getDifficultyAdjustedPattern());
+  } finally {
+    activeDifficultyId = previousDifficultyId;
+  }
+}
+
 function downloadJson(value: unknown, fileName: string): void {
-  const data = JSON.stringify(value, null, 2);
-  const blob = new Blob([data], { type: "application/json" });
+  downloadBlob(new Blob([stringifyJson(value)], { type: "application/json" }), fileName);
+}
+
+function stringifyJson(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}
+
+function downloadBlob(blob: Blob, fileName: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
 
@@ -2050,6 +2111,160 @@ function downloadJson(value: unknown, fileName: string): void {
   anchor.download = fileName;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function createZipBlob(files: ZipTextFile[]): Blob {
+  const encoder = new TextEncoder();
+  const entries = files.map((file) => {
+    const nameBytes = encoder.encode(file.name);
+    const dataBytes = encoder.encode(file.data);
+
+    return {
+      nameBytes,
+      dataBytes,
+      crc32: calculateCrc32(dataBytes),
+    };
+  });
+  const { date, time } = getZipDateTime(new Date());
+  const localParts: Uint8Array[] = [];
+  const centralParts: Uint8Array[] = [];
+  let offset = 0;
+
+  for (const entry of entries) {
+    const localHeader = createZipLocalHeader(entry.nameBytes, entry.dataBytes, entry.crc32, date, time);
+
+    localParts.push(localHeader, entry.dataBytes);
+    centralParts.push(createZipCentralDirectoryHeader(entry.nameBytes, entry.dataBytes, entry.crc32, date, time, offset));
+    offset += localHeader.length + entry.dataBytes.length;
+  }
+
+  const centralDirectoryOffset = offset;
+  const centralDirectorySize = centralParts.reduce((size, part) => size + part.length, 0);
+  const endRecord = createZipEndRecord(entries.length, centralDirectorySize, centralDirectoryOffset);
+  const totalSize = centralDirectoryOffset + centralDirectorySize + endRecord.length;
+  const archive = new Uint8Array(totalSize);
+  let cursor = 0;
+
+  for (const part of [...localParts, ...centralParts, endRecord]) {
+    archive.set(part, cursor);
+    cursor += part.length;
+  }
+
+  return new Blob([archive], { type: "application/zip" });
+}
+
+function createZipLocalHeader(nameBytes: Uint8Array, dataBytes: Uint8Array, crc32: number, date: number, time: number): Uint8Array {
+  const header = new Uint8Array(30 + nameBytes.length);
+  const view = new DataView(header.buffer);
+
+  view.setUint32(0, 0x04034b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(6, 0x0800, true);
+  view.setUint16(8, 0, true);
+  view.setUint16(10, time, true);
+  view.setUint16(12, date, true);
+  view.setUint32(14, crc32, true);
+  view.setUint32(18, dataBytes.length, true);
+  view.setUint32(22, dataBytes.length, true);
+  view.setUint16(26, nameBytes.length, true);
+  view.setUint16(28, 0, true);
+  header.set(nameBytes, 30);
+  return header;
+}
+
+function createZipCentralDirectoryHeader(
+  nameBytes: Uint8Array,
+  dataBytes: Uint8Array,
+  crc32: number,
+  date: number,
+  time: number,
+  localHeaderOffset: number,
+): Uint8Array {
+  const header = new Uint8Array(46 + nameBytes.length);
+  const view = new DataView(header.buffer);
+
+  view.setUint32(0, 0x02014b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(6, 20, true);
+  view.setUint16(8, 0x0800, true);
+  view.setUint16(10, 0, true);
+  view.setUint16(12, time, true);
+  view.setUint16(14, date, true);
+  view.setUint32(16, crc32, true);
+  view.setUint32(20, dataBytes.length, true);
+  view.setUint32(24, dataBytes.length, true);
+  view.setUint16(28, nameBytes.length, true);
+  view.setUint16(30, 0, true);
+  view.setUint16(32, 0, true);
+  view.setUint16(34, 0, true);
+  view.setUint16(36, 0, true);
+  view.setUint32(38, 0, true);
+  view.setUint32(42, localHeaderOffset, true);
+  header.set(nameBytes, 46);
+  return header;
+}
+
+function createZipEndRecord(entryCount: number, centralDirectorySize: number, centralDirectoryOffset: number): Uint8Array {
+  const record = new Uint8Array(22);
+  const view = new DataView(record.buffer);
+
+  view.setUint32(0, 0x06054b50, true);
+  view.setUint16(4, 0, true);
+  view.setUint16(6, 0, true);
+  view.setUint16(8, entryCount, true);
+  view.setUint16(10, entryCount, true);
+  view.setUint32(12, centralDirectorySize, true);
+  view.setUint32(16, centralDirectoryOffset, true);
+  view.setUint16(20, 0, true);
+  return record;
+}
+
+function getZipDateTime(dateValue: Date): { date: number; time: number } {
+  const year = Math.max(1980, dateValue.getFullYear());
+  const month = dateValue.getMonth() + 1;
+  const day = dateValue.getDate();
+  const hours = dateValue.getHours();
+  const minutes = dateValue.getMinutes();
+  const seconds = Math.floor(dateValue.getSeconds() / 2);
+
+  return {
+    date: ((year - 1980) << 9) | (month << 5) | day,
+    time: (hours << 11) | (minutes << 5) | seconds,
+  };
+}
+
+let crc32Table: Uint32Array | null = null;
+
+function calculateCrc32(data: Uint8Array): number {
+  const table = getCrc32Table();
+  let crc = 0xffffffff;
+
+  for (const byte of data) {
+    crc = (crc >>> 8) ^ table[(crc ^ byte) & 0xff];
+  }
+
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function getCrc32Table(): Uint32Array {
+  if (crc32Table) {
+    return crc32Table;
+  }
+
+  const table = new Uint32Array(256);
+
+  for (let index = 0; index < table.length; index += 1) {
+    let crc = index;
+
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+    }
+
+    table[index] = crc >>> 0;
+  }
+
+  crc32Table = table;
+  return table;
 }
 
 async function importPattern(file: File): Promise<void> {
@@ -6301,6 +6516,7 @@ function iconSvg(name: string): string {
     collapse: '<path d="M4 5v14"></path><path d="M20 5v14"></path><path d="m9 8 3 4-3 4"></path><path d="m15 8-3 4 3 4"></path>',
     lane: '<rect x="4" y="4" width="16" height="16" rx="1"></rect><path d="M9 4v16"></path><path d="M15 4v16"></path>',
     download: '<path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path>',
+    archive: '<path d="M4 7h16"></path><path d="M5 7v13h14V7"></path><path d="M7 3h10l3 4H4l3-4z"></path><path d="M10 11h4"></path>',
     upload: '<path d="M12 21V9"></path><path d="m7 14 5-5 5 5"></path><path d="M5 3h14"></path>',
     image: '<rect x="3" y="5" width="18" height="14" rx="2"></rect><circle cx="8" cy="10" r="2"></circle><path d="m3 17 5-5 4 4 3-3 6 6"></path>',
     sparkles: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z"></path><path d="M5 15l.8 2.2L8 18l-2.2.8L5 21l-.8-2.2L2 18l2.2-.8L5 15z"></path><path d="M19 3l.6 1.6L21 5l-1.4.4L19 7l-.6-1.6L17 5l1.4-.4L19 3z"></path>',

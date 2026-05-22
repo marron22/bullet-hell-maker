@@ -66,34 +66,26 @@ export interface UnityStageDataJson {
 }
 
 export interface UnityBulletDataJson {
-  position: Float2;
-  velocity: Float2;
-  angle: number;
   originPos: Float2;
   originVlc: Float2;
   startX: number;
   speed: number;
-  accel: number;
-  acccel: number;
   gravity: number;
   angleSpeed: number;
+  initialAngle: number;
   polarForm: Float2;
   radiusVlc: number;
   thetaVlc: number;
   startPos: Float2;
-  nowCalculateVlc: Float2;
-  nowCalculateX: number;
   polynomial: Float4;
-  typeId: number;
   typeName: string;
-  size: number;
+  scale: Float2;
   color: Float4;
-  areaNum: number;
-  time: number;
   appearTime: number;
+  appearDuration: number;
   life: number;
   random: number;
-  isActive: boolean;
+  unCounterable: boolean;
 }
 
 export interface UnityBulletBufferJson {
@@ -518,9 +510,7 @@ function createUnityBulletData(
   overrides: { speed?: number; size?: number; life?: number } = {},
 ): UnityBulletDataJson {
   const editorTypeId = Math.round(motion.typeId ?? 0);
-  const typeId = toUnityBulletTypeId(editorTypeId);
   const speed = toUnitySpeed(context, overrides.speed ?? motion.pathSpeed, editorAngleDegrees);
-  const size = editorTypeId === 4 ? getUnityOverscanLaserLength() : toUnityScalar(context, overrides.size ?? getMotionSize(motion));
   const startX = toUnityScalarX(context, motion.pathStartX);
   const xUnitScale = polynomialUnitPixels / context.scaleX;
   const yUnitScale = polynomialUnitPixels / context.scaleY;
@@ -533,37 +523,28 @@ function createUnityBulletData(
   const angle = toUnityAngle(context, editorAngleDegrees);
   const startPos = float2(startX, evaluateUnityPolynomial(polynomial, startX));
   const data: UnityBulletDataJson = {
-    position: float2(0, 0),
-    velocity: float2(0, 0),
-    angle: 0,
     originPos: float2(0, 0),
     originVlc: float2(0, 0),
     startX,
     speed,
-    accel: 0,
-    acccel: 0,
     gravity: round(-motion.gravity / context.scaleY),
     angleSpeed: round(degreesToRadians(-motion.angleSpeed)),
+    initialAngle: round(degreesToRadians(-motion.visualAngle)),
     polarForm: float2(round(motion.polarRadius), round(degreesToRadians(angle))),
     radiusVlc: round(motion.polarRadiusVelocity),
     thetaVlc: round(degreesToRadians(-motion.polarThetaVelocity)),
     startPos,
-    nowCalculateVlc: float2(0, 0),
-    nowCalculateX: startX,
     polynomial,
-    typeId,
     typeName: typeNameForMotion(context, motion, editorTypeId),
-    size,
+    scale: getUnityMotionScale(context, motion, editorTypeId, overrides.size),
     color: colorToFloat4(motion.color),
-    areaNum: 0,
-    time: 0,
     appearTime: 0,
+    appearDuration: 0,
     life: round(overrides.life ?? motion.duration),
     random: 0,
-    isActive: true,
+    unCounterable: false,
   };
 
-  data.nowCalculateVlc = getInitialPolynomialVelocity(data.polynomial, data.startX, speed);
   return data;
 }
 
@@ -600,18 +581,20 @@ function getMotionOrigin(context: ExportContext, event: BulletMotionFields): Flo
   return toUnityPoint(context, event.originX, event.originY);
 }
 
-function getMotionSize(event: BulletMotionFields): number {
-  const typeId = Math.round(event.typeId ?? 0);
+function getUnityMotionScale(context: ExportContext, event: BulletMotionFields, editorTypeId: number, sizeOverride?: number): Float2 {
+  if (typeof sizeOverride === "number") {
+    const size = toUnityScalar(context, sizeOverride);
 
-  if (typeId === 4) {
-    return event.visualWidth;
+    return float2(size, size);
   }
 
-  if (typeId !== 0) {
-    return Math.max(event.visualWidth, event.visualHeight);
+  if (editorTypeId === 0) {
+    const size = toUnityScalar(context, event.visualSize);
+
+    return float2(size, size);
   }
 
-  return event.visualSize;
+  return float2(toUnityScalarX(context, event.visualWidth), toUnityScalarY(context, event.visualHeight));
 }
 
 function isLaserMotion(event: BulletMotionFields): boolean {
@@ -670,6 +653,10 @@ function toUnityScalarX(context: ExportContext, value: number): number {
   return round(value / context.scaleX);
 }
 
+function toUnityScalarY(context: ExportContext, value: number): number {
+  return round(value / context.scaleY);
+}
+
 function toUnityDistanceAlongAngle(context: ExportContext, value: number, editorAngleDegrees: number): number {
   const angle = degreesToRadians(editorAngleDegrees);
   const x = Math.cos(angle) / context.scaleX;
@@ -699,14 +686,6 @@ function colorToFloat4(color: number): Float4 {
     z: round((color & 0xff) / 255),
     w: 1,
   };
-}
-
-function toUnityBulletTypeId(editorTypeId: number): number {
-  if (editorTypeId === 0) {
-    return 1;
-  }
-
-  return editorTypeId;
 }
 
 function typeNameFromTypeId(typeId: number): string {
@@ -755,13 +734,6 @@ function sanitizeUnityTypeName(value: unknown, fallback = defaultUnityBulletType
   }
 
   return value.trim().replace(/[^A-Za-z0-9_-]+/gu, "_").replace(/^[-_]+|[-_]+$/gu, "") || fallback;
-}
-
-function getInitialPolynomialVelocity(polynomial: Float4, x: number, speed: number): Float2 {
-  const tangent = polynomial.x + 2 * polynomial.y * x + 3 * polynomial.z * x * x + 4 * polynomial.w * x * x * x;
-  const magnitude = Math.sqrt(1 + tangent * tangent) || 1;
-
-  return float2(speed / magnitude, (tangent * speed) / magnitude);
 }
 
 function evaluateUnityPolynomial(polynomial: Float4, x: number): number {
