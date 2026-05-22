@@ -284,7 +284,8 @@ button:disabled {
   color: #070707;
 }
 
-.gamepad-status {
+.gamepad-status,
+.hardware-status {
   align-items: center;
   background: #111111;
   border: 1px solid #303030;
@@ -297,15 +298,22 @@ button:disabled {
   white-space: nowrap;
 }
 
-.gamepad-status.is-connected {
+.gamepad-status.is-connected,
+.hardware-status.is-connected {
   border-color: #4b4b4b;
   color: #d9d9d9;
 }
 
-.gamepad-status.is-active {
+.gamepad-status.is-active,
+.hardware-status.is-active {
   background: #1a0c11;
   border-color: #f82469;
   color: #ffffff;
+}
+
+.hardware-status.has-error {
+  border-color: #7a4630;
+  color: #ffc7a6;
 }
 
 .menu-popover {

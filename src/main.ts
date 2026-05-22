@@ -85,7 +85,21 @@ type PreviewGamepadInput = {
   dashPressed: boolean;
 };
 
-const appVersion = "v0.29";
+type PreviewSerialInput = PreviewGamepadInput & {
+  error: string | null;
+};
+
+type SerialPortLike = {
+  readable: ReadableStream<Uint8Array> | null;
+  open(options: { baudRate: number }): Promise<void>;
+  close(): Promise<void>;
+};
+
+type SerialApiLike = EventTarget & {
+  requestPort(): Promise<SerialPortLike>;
+};
+
+const appVersion = "v0.30";
 const previewTextureScaleMin = 0.1;
 const previewTextureScaleMax = 50;
 const defaultUnityBulletTypeName = "normal";
@@ -126,6 +140,13 @@ let playerWasHit = false;
 const pressedPreviewKeys = new Set<string>();
 const lastPreviewDirection = { x: 0, y: -1 };
 let previewGamepadDashWasPressed = false;
+let previewSerialPort: SerialPortLike | null = null;
+let previewSerialReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+let previewSerialReadLoopAbort = false;
+let previewSerialBuffer = "";
+let previewSerialInput = createEmptyPreviewSerialInput();
+let previewSerialDashWasPressed = false;
+let previewSerialConnecting = false;
 let timelinePanelHeight = 220;
 let inspectorPanelWidth = 380;
 let activeResizeTarget: "timeline" | "inspector" | null = null;
@@ -630,6 +651,8 @@ appRoot.innerHTML = `
         <button id="preview-lightweight-toggle-button" class="preview-option-button is-active" type="button" aria-pressed="true" title="プレビューの軽量化">${iconSvg("pulse")}<span>軽量</span></button>
         <button id="preview-timeline-toggle-button" class="preview-option-button is-active" type="button" aria-pressed="true" title="タイムライン表示">${iconSvg("eye")}<span>タイムライン</span></button>
         <span id="gamepad-status" class="gamepad-status" title="プレビューモードでは、接続したゲームパッドのスティック / 方向ボタンで移動し、通常ボタンでダッシュできます。">パッド: 未検出</span>
+        <button id="serial-connect-button" class="preview-option-button" type="button" title="ESP32-S3 などの USB Serial コントローラーに接続します。">${iconSvg("plug")}<span>Serial接続</span></button>
+        <span id="serial-status" class="hardware-status" title="Web Serial API で接続したコントローラーの状態です。">Serial: 未接続</span>
       </div>
       <div class="hidden-inputs">
         <input id="import-input" type="file" accept="application/json,.json" hidden />
@@ -742,6 +765,8 @@ const resetButton = requireElement<HTMLButtonElement>("#reset-button");
 const previewLightweightToggleButton = requireElement<HTMLButtonElement>("#preview-lightweight-toggle-button");
 const previewTimelineToggleButton = requireElement<HTMLButtonElement>("#preview-timeline-toggle-button");
 const gamepadStatus = requireElement<HTMLSpanElement>("#gamepad-status");
+const serialConnectButton = requireElement<HTMLButtonElement>("#serial-connect-button");
+const serialStatus = requireElement<HTMLSpanElement>("#serial-status");
 const exportButton = requireElement<HTMLButtonElement>("#export-button");
 const exportUnityButton = requireElement<HTMLButtonElement>("#export-unity-button");
 const exportUnityAllButton = requireElement<HTMLButtonElement>("#export-unity-all-button");
@@ -1292,6 +1317,24 @@ window.addEventListener("gamepadconnected", () => {
 window.addEventListener("gamepaddisconnected", () => {
   previewGamepadDashWasPressed = false;
   syncGamepadStatus(readPreviewGamepadInput());
+});
+
+window.addEventListener("pagehide", () => {
+  previewSerialReadLoopAbort = true;
+  void previewSerialReader?.cancel();
+  void previewSerialPort?.close();
+});
+
+serialConnectButton.addEventListener("click", () => {
+  if (previewSerialPort || previewSerialConnecting) {
+    void disconnectPreviewSerial();
+  } else {
+    void connectPreviewSerial();
+  }
+});
+
+getPreviewSerialApi()?.addEventListener("disconnect", () => {
+  void disconnectPreviewSerial();
 });
 
 timelineTrack.addEventListener("pointerdown", (event) => {
@@ -3073,6 +3116,7 @@ function setEditorMode(mode: EditorMode): void {
     dashTimeRemaining = 0;
     dashCooldownRemaining = 0;
     previewGamepadDashWasPressed = false;
+    previewSerialDashWasPressed = false;
     previewPlayerVelocity.x = 0;
     previewPlayerVelocity.y = 0;
     playerWasHit = false;
@@ -3090,6 +3134,7 @@ function setEditorMode(mode: EditorMode): void {
   } else {
     pressedPreviewKeys.clear();
     previewGamepadDashWasPressed = false;
+    previewSerialDashWasPressed = false;
     previewPlayerVelocity.x = 0;
     previewPlayerVelocity.y = 0;
     preview.setPointerControlEnabled(editorMode === "global");
@@ -3677,16 +3722,23 @@ function getFixedPreviewPlayerPosition(): { x: number; y: number } {
 
 function updatePreviewPlayer(deltaSeconds: number): void {
   const gamepadInput = readPreviewGamepadInput();
+  const serialInput = previewSerialInput;
 
   syncGamepadStatus(gamepadInput);
+  syncSerialStatus();
 
   if (gamepadInput.dashPressed && !previewGamepadDashWasPressed) {
     dashRequested = true;
   }
 
-  previewGamepadDashWasPressed = gamepadInput.dashPressed;
+  if (serialInput.dashPressed && !previewSerialDashWasPressed) {
+    dashRequested = true;
+  }
 
-  const direction = getPreviewMoveDirection(gamepadInput);
+  previewGamepadDashWasPressed = gamepadInput.dashPressed;
+  previewSerialDashWasPressed = serialInput.dashPressed;
+
+  const direction = getPreviewMoveDirection(gamepadInput, serialInput);
   const hasDirection = Math.hypot(direction.x, direction.y) > 0.001;
 
   if (hasDirection) {
@@ -3729,7 +3781,7 @@ function updatePreviewPlayer(deltaSeconds: number): void {
   preview.movePlayer(previewPlayerVelocity.x * deltaSeconds, previewPlayerVelocity.y * deltaSeconds);
 }
 
-function getPreviewMoveDirection(gamepadInput: PreviewGamepadInput): { x: number; y: number } {
+function getPreviewMoveDirection(gamepadInput: PreviewGamepadInput, serialInput: PreviewSerialInput): { x: number; y: number } {
   let x = 0;
   let y = 0;
 
@@ -3758,6 +3810,8 @@ function getPreviewMoveDirection(gamepadInput: PreviewGamepadInput): { x: number
 
   x += gamepadInput.x;
   y += gamepadInput.y;
+  x += serialInput.x;
+  y += serialInput.y;
 
   const length = Math.hypot(x, y);
 
@@ -3849,6 +3903,280 @@ function syncGamepadStatus(input: PreviewGamepadInput): void {
 
   gamepadStatus.textContent = input.active ? "パッド: 入力中" : "パッド: 接続中";
   gamepadStatus.title = `${input.name}\nスティック / 方向ボタン: 移動\n通常ボタン: ダッシュ`;
+}
+
+async function connectPreviewSerial(): Promise<void> {
+  const serial = getPreviewSerialApi();
+
+  if (!serial) {
+    previewSerialInput = {
+      ...createEmptyPreviewSerialInput(),
+      error: "このブラウザは Web Serial API に対応していません。",
+    };
+    syncSerialStatus();
+    window.alert("このブラウザは Web Serial API に対応していません。Chrome / Edge 系ブラウザで開いてください。");
+    return;
+  }
+
+  previewSerialConnecting = true;
+  syncSerialStatus();
+
+  try {
+    const port = await serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    previewSerialPort = port;
+    previewSerialInput = {
+      ...createEmptyPreviewSerialInput(),
+      connected: true,
+      name: "USB Serial Controller",
+    };
+    previewSerialBuffer = "";
+    previewSerialDashWasPressed = false;
+    previewSerialReadLoopAbort = false;
+    syncSerialStatus();
+    void readPreviewSerialLoop(port);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Serial 接続に失敗しました。";
+    previewSerialInput = {
+      ...createEmptyPreviewSerialInput(),
+      error: message,
+    };
+    previewSerialPort = null;
+    previewSerialDashWasPressed = false;
+    console.warn("Serial controller could not be connected.", error);
+  } finally {
+    previewSerialConnecting = false;
+    syncSerialStatus();
+  }
+}
+
+async function disconnectPreviewSerial(): Promise<void> {
+  const port = previewSerialPort;
+  const reader = previewSerialReader;
+
+  previewSerialReadLoopAbort = true;
+  previewSerialPort = null;
+  previewSerialReader = null;
+  previewSerialInput = createEmptyPreviewSerialInput();
+  previewSerialDashWasPressed = false;
+  syncSerialStatus();
+
+  try {
+    await reader?.cancel();
+  } catch (error) {
+    console.warn("Serial reader could not be cancelled.", error);
+  } finally {
+    try {
+      reader?.releaseLock();
+    } catch {
+      // The read loop may already have released the lock.
+    }
+  }
+
+  try {
+    await port?.close();
+  } catch (error) {
+    console.warn("Serial port could not be closed.", error);
+  }
+}
+
+async function readPreviewSerialLoop(port: SerialPortLike): Promise<void> {
+  if (!port.readable) {
+    previewSerialInput = {
+      ...createEmptyPreviewSerialInput(),
+      error: "Serial readable stream is not available.",
+    };
+    previewSerialPort = null;
+    syncSerialStatus();
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  const reader = port.readable.getReader();
+  previewSerialReader = reader;
+
+  try {
+    while (!previewSerialReadLoopAbort && previewSerialPort === port) {
+      const result = await reader.read();
+
+      if (result.done) {
+        break;
+      }
+
+      if (result.value) {
+        consumePreviewSerialText(decoder.decode(result.value, { stream: true }));
+      }
+    }
+  } catch (error) {
+    if (!previewSerialReadLoopAbort) {
+      const message = error instanceof Error ? error.message : "Serial 読み取りが中断されました。";
+      previewSerialInput = {
+        ...createEmptyPreviewSerialInput(),
+        error: message,
+      };
+      console.warn("Serial controller read loop stopped.", error);
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch (error) {
+      console.warn("Serial reader lock could not be released.", error);
+    }
+
+    if (previewSerialReader === reader) {
+      previewSerialReader = null;
+    }
+
+    if (previewSerialPort === port && !previewSerialReadLoopAbort) {
+      previewSerialPort = null;
+      previewSerialInput = createEmptyPreviewSerialInput();
+    }
+
+    syncSerialStatus();
+  }
+}
+
+function consumePreviewSerialText(text: string): void {
+  previewSerialBuffer += text;
+
+  for (;;) {
+    const lineEndIndex = previewSerialBuffer.search(/\r?\n/);
+
+    if (lineEndIndex < 0) {
+      previewSerialBuffer = previewSerialBuffer.slice(-256);
+      return;
+    }
+
+    const line = previewSerialBuffer.slice(0, lineEndIndex).trim();
+    previewSerialBuffer = previewSerialBuffer.slice(lineEndIndex + (previewSerialBuffer[lineEndIndex] === "\r" && previewSerialBuffer[lineEndIndex + 1] === "\n" ? 2 : 1));
+
+    if (line) {
+      applyPreviewSerialLine(line);
+    }
+  }
+}
+
+function applyPreviewSerialLine(line: string): void {
+  const parsed = parsePreviewSerialLine(line);
+
+  if (!parsed) {
+    previewSerialInput = {
+      ...previewSerialInput,
+      connected: Boolean(previewSerialPort),
+      active: false,
+      error: `Serial 入力を解釈できません: ${line.slice(0, 40)}`,
+    };
+    syncSerialStatus();
+    return;
+  }
+
+  previewSerialInput = {
+    connected: true,
+    active: Math.hypot(parsed.x, parsed.y) > 0.001 || parsed.dashPressed,
+    name: previewSerialInput.name || "USB Serial Controller",
+    x: parsed.x,
+    y: parsed.y,
+    dashPressed: parsed.dashPressed,
+    error: null,
+  };
+  syncSerialStatus();
+}
+
+function parsePreviewSerialLine(line: string): { x: number; y: number; dashPressed: boolean } | null {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+
+    if (isRecord(parsed)) {
+      const x = Number(parsed.x);
+      const y = Number(parsed.y);
+
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        const dash = parsed.dash ?? parsed.button ?? (Array.isArray(parsed.buttons) ? parsed.buttons.some(Boolean) : parsed.buttons);
+
+        return {
+          x: clamp(x, -1, 1),
+          y: clamp(y, -1, 1),
+          dashPressed: Boolean(dash),
+        };
+      }
+    }
+  } catch {
+    // Fall through to CSV parsing.
+  }
+
+  const parts = line.split(",").map((part) => part.trim());
+
+  if (parts.length < 3) {
+    return null;
+  }
+
+  const x = Number(parts[0]);
+  const y = Number(parts[1]);
+  const dash = Number(parts[2]);
+
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(dash)) {
+    return null;
+  }
+
+  return {
+    x: clamp(x, -1, 1),
+    y: clamp(y, -1, 1),
+    dashPressed: dash >= previewGamepadButtonThreshold,
+  };
+}
+
+function createEmptyPreviewSerialInput(): PreviewSerialInput {
+  return {
+    connected: false,
+    active: false,
+    name: "",
+    x: 0,
+    y: 0,
+    dashPressed: false,
+    error: null,
+  };
+}
+
+function syncSerialStatus(): void {
+  const supported = Boolean(getPreviewSerialApi());
+  const connected = Boolean(previewSerialPort);
+  const input = previewSerialInput;
+
+  serialConnectButton.disabled = !supported || previewSerialConnecting;
+  serialConnectButton.classList.toggle("is-active", connected);
+  serialConnectButton.setAttribute("aria-pressed", String(connected));
+  serialConnectButton.title = supported ? "ESP32-S3 などの USB Serial コントローラーに接続します。" : "このブラウザは Web Serial API に対応していません。";
+
+  serialStatus.classList.toggle("is-connected", connected);
+  serialStatus.classList.toggle("is-active", input.active);
+  serialStatus.classList.toggle("has-error", Boolean(input.error) || !supported);
+
+  if (!supported) {
+    serialConnectButton.querySelector("span")!.textContent = "非対応";
+    serialStatus.textContent = "Serial: 非対応";
+    serialStatus.title = "Chrome / Edge 系ブラウザと localhost または HTTPS が必要です。";
+    return;
+  }
+
+  serialConnectButton.querySelector("span")!.textContent = connected ? "Serial切断" : "Serial接続";
+
+  if (previewSerialConnecting) {
+    serialStatus.textContent = "Serial: 接続中";
+  } else if (input.error) {
+    serialStatus.textContent = "Serial: エラー";
+  } else if (connected && input.active) {
+    serialStatus.textContent = "Serial: 入力中";
+  } else if (connected) {
+    serialStatus.textContent = "Serial: 接続中";
+  } else {
+    serialStatus.textContent = "Serial: 未接続";
+  }
+
+  serialStatus.title = input.error ?? "JSON Lines: {\"x\":0,\"y\":0,\"dash\":false} または CSV: x,y,dash を 115200bps で受け取ります。";
+}
+
+function getPreviewSerialApi(): SerialApiLike | undefined {
+  return (navigator as Navigator & { serial?: SerialApiLike }).serial;
 }
 
 function isPreviewControlCode(code: string): boolean {
@@ -4006,6 +4334,7 @@ function syncUi(): void {
   }
 
   syncPreviewOptionButtons(isPreviewMode);
+  syncSerialStatus();
   timeDisplay.textContent = `${clock.time.toFixed(2)}s / ${pattern.duration.toFixed(2)}s`;
   timelinePlayhead.style.left = `${(clock.time / pattern.duration) * 100}%`;
   syncPlaybackButton();
@@ -6715,6 +7044,7 @@ function iconSvg(name: string): string {
     download: '<path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path>',
     archive: '<path d="M4 7h16"></path><path d="M5 7v13h14V7"></path><path d="M7 3h10l3 4H4l3-4z"></path><path d="M10 11h4"></path>',
     upload: '<path d="M12 21V9"></path><path d="m7 14 5-5 5 5"></path><path d="M5 3h14"></path>',
+    plug: '<path d="M9 7V3"></path><path d="M15 7V3"></path><path d="M7 7h10v4a5 5 0 0 1-10 0V7z"></path><path d="M12 16v5"></path>',
     image: '<rect x="3" y="5" width="18" height="14" rx="2"></rect><circle cx="8" cy="10" r="2"></circle><path d="m3 17 5-5 4 4 3-3 6 6"></path>',
     sparkles: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z"></path><path d="M5 15l.8 2.2L8 18l-2.2.8L5 21l-.8-2.2L2 18l2.2-.8L5 15z"></path><path d="M19 3l.6 1.6L21 5l-1.4.4L19 7l-.6-1.6L17 5l1.4-.4L19 3z"></path>',
     trash: '<path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 15H6L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>',
