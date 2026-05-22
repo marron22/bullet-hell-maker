@@ -64,7 +64,7 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.20";
+const appVersion = "v0.21";
 let pattern = createStarterPattern();
 let activeDifficultyId: DifficultyId = pattern.activeDifficulty ?? "normal";
 const clock = new PlaybackClock();
@@ -1271,6 +1271,7 @@ propertyForm.addEventListener("click", (event) => {
 
 propertyForm.addEventListener("input", handlePropertyUpdate);
 propertyForm.addEventListener("change", handlePropertyUpdate);
+packagePanel.addEventListener("input", handlePackagePanelLiveInput);
 packagePanel.addEventListener("change", handlePackagePanelInput);
 packagePanel.addEventListener("click", handlePackagePanelClick);
 packagePanel.addEventListener("dblclick", handlePackagePanelDoubleClick);
@@ -1388,6 +1389,7 @@ function handlePropertyUpdate(event: Event): void {
   if (input.name === "typeId") {
     renderPropertyForm();
   }
+  invalidatePreviewRenderCache();
   renderPreview();
   syncUi();
 }
@@ -1487,8 +1489,52 @@ function handleBulkPackagePropertyUpdate(packageEvent: AttackPackageEvent, input
   renderTimelineMarkers();
   renderPackagePanel();
   renderPropertyForm();
+  invalidatePreviewRenderCache();
   renderPreview();
   syncUi();
+}
+
+function handlePackagePanelLiveInput(event: Event): void {
+  const packageEvent = getSelectedPackageEvent();
+  const input = event.target;
+
+  if (!packageEvent || !(input instanceof HTMLInputElement)) {
+    return;
+  }
+
+  handlePackageTextureDisplayInput(packageEvent, input);
+}
+
+function handlePackageTextureDisplayInput(packageEvent: AttackPackageEvent, input: HTMLInputElement): boolean {
+  if (input.name === "previewBulletTextureScale") {
+    const nextScale = clamp(Number(input.value), 0.1, 5);
+
+    if (!Number.isFinite(nextScale) || nextScale === getPackageBulletTextureScale(packageEvent)) {
+      return true;
+    }
+
+    pushHistory();
+    packageEvent.previewBulletTextureScale = nextScale;
+    renderPreview();
+    syncUi();
+    return true;
+  }
+
+  if (input.name === "previewBulletTextureAngle") {
+    const nextAngle = clamp(Number(input.value), -720, 720);
+
+    if (!Number.isFinite(nextAngle) || nextAngle === getPackageBulletTextureAngle(packageEvent)) {
+      return true;
+    }
+
+    pushHistory();
+    packageEvent.previewBulletTextureAngle = nextAngle;
+    renderPreview();
+    syncUi();
+    return true;
+  }
+
+  return false;
 }
 
 function handlePackagePanelInput(event: Event): void {
@@ -1517,31 +1563,7 @@ function handlePackagePanelInput(event: Event): void {
     return;
   }
 
-  if (input.name === "previewBulletTextureScale" && input instanceof HTMLInputElement) {
-    const nextScale = clamp(Number(input.value), 0.1, 5);
-
-    if (!Number.isFinite(nextScale) || nextScale === getPackageBulletTextureScale(packageEvent)) {
-      return;
-    }
-
-    pushHistory();
-    packageEvent.previewBulletTextureScale = nextScale;
-    renderPreview();
-    syncUi();
-    return;
-  }
-
-  if (input.name === "previewBulletTextureAngle" && input instanceof HTMLInputElement) {
-    const nextAngle = clamp(Number(input.value), -720, 720);
-
-    if (!Number.isFinite(nextAngle) || nextAngle === getPackageBulletTextureAngle(packageEvent)) {
-      return;
-    }
-
-    pushHistory();
-    packageEvent.previewBulletTextureAngle = nextAngle;
-    renderPreview();
-    syncUi();
+  if (input instanceof HTMLInputElement && handlePackageTextureDisplayInput(packageEvent, input)) {
     return;
   }
 
@@ -2410,6 +2432,7 @@ async function setPackageBulletTextureAsset(packageEvent: AttackPackageEvent, as
   pushHistory();
   packageEvent.previewBulletTexture = asset;
   packageEvent.previewBulletTextureScale = getPackageBulletTextureScale(packageEvent);
+  invalidatePreviewRenderCache();
 
   if (asset?.dataUrl) {
     void preview.loadBulletTexture(asset.dataUrl)
@@ -2427,6 +2450,7 @@ async function setPackageBulletTextureAsset(packageEvent: AttackPackageEvent, as
 function clearPackageBulletTexture(packageEvent: AttackPackageEvent): void {
   pushHistory();
   packageEvent.previewBulletTexture = null;
+  invalidatePreviewRenderCache();
   renderPackagePanel();
   renderPreview();
   syncUi();
@@ -2452,6 +2476,7 @@ async function setEnemyPreviewTextureAsset(enemyEvent: SpawnEnemyOriginEvent, as
   pushHistory();
   enemyEvent.previewEnemyTexture = asset;
   enemyEvent.previewEnemyTextureScale = getEnemyTextureScale(enemyEvent);
+  invalidatePreviewRenderCache();
 
   if (asset?.dataUrl) {
     void preview.loadEnemyTexture(asset.dataUrl)
@@ -2469,6 +2494,7 @@ async function setEnemyPreviewTextureAsset(enemyEvent: SpawnEnemyOriginEvent, as
 function clearEnemyPreviewTexture(enemyEvent: SpawnEnemyOriginEvent): void {
   pushHistory();
   enemyEvent.previewEnemyTexture = null;
+  invalidatePreviewRenderCache();
   renderPropertyForm();
   renderPreview();
   syncUi();
