@@ -1,4 +1,4 @@
-# 弾幕メーカー v0.27
+# 弾幕メーカー v0.28
 
 JSaB風の回避アクションゲーム向けに、弾幕やレーザー、危険領域をタイムライン上で作成・確認するためのブラウザツールです。
 
@@ -29,9 +29,9 @@ https://marron22.github.io/bullet-hell-maker/
 - プロパティ: 選択中の通常攻撃、またはパッケージ内の子攻撃を細かく編集します。
 - 音楽: 音楽読み込み、音量、BPM、1小節の時間を設定します。
 
-## v0.27 更新
+## v0.28 更新
 
-- Discord Webhook へ開発日誌 Markdown を投稿する `npm run devlog:discord` を追加しました。Webhook URL は環境変数で渡し、リポジトリには保存しません。
+- 開発日誌を `.md` ファイルなしで直接 Discord Webhook に投稿できるようにしました。`--message` / `DISCORD_DEVLOG_MESSAGE` / `--stdin` で本文を渡せます。
 
 ## パッケージ
 

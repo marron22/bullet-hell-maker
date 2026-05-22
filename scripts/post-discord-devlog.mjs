@@ -52,6 +52,10 @@ function parseArgs(argv) {
       parsed.file = requireValue(argv, ++index, arg);
     } else if (arg === "--message") {
       parsed.message = requireValue(argv, ++index, arg);
+    } else if (arg === "--message-env") {
+      parsed.messageEnv = requireValue(argv, ++index, arg);
+    } else if (arg === "--stdin") {
+      parsed.stdin = true;
     } else if (arg === "--title") {
       parsed.title = requireValue(argv, ++index, arg);
     } else if (arg === "--thread-id") {
@@ -69,11 +73,19 @@ function parseArgs(argv) {
 }
 
 async function resolveContent(parsed) {
-  if (parsed.file && parsed.message) {
-    throw new Error("Use either --file or --message, not both.");
+  const bodySources = [parsed.file, parsed.message, parsed.messageEnv, parsed.stdin].filter(Boolean).length;
+
+  if (bodySources > 1) {
+    throw new Error("Use only one of --message, --message-env, --stdin, or --file.");
   }
 
-  const body = parsed.file ? await readFile(parsed.file, "utf8") : parsed.message ?? "";
+  const body = parsed.file
+    ? await readFile(parsed.file, "utf8")
+    : parsed.stdin
+      ? await readFile(0, "utf8")
+      : parsed.messageEnv
+        ? process.env[parsed.messageEnv] ?? ""
+        : parsed.message ?? process.env.DISCORD_DEVLOG_MESSAGE ?? "";
 
   if (!parsed.title) {
     return body;
