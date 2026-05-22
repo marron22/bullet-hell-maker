@@ -76,7 +76,7 @@ type PreviewEventWindow = {
   activeEndTime: number;
 };
 
-const appVersion = "v0.26";
+const appVersion = "v0.27";
 const previewTextureScaleMin = 0.1;
 const previewTextureScaleMax = 50;
 const defaultUnityBulletTypeName = "normal";
